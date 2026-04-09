@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+__pycache__/
+*.pyc
+temp.log
+CLAUDE.md

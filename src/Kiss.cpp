@@ -5,6 +5,7 @@
 #include "Led.h"
 #include "Eeprom.h"
 #include "Battery.h"
+#include "Ble.h"
 #include <Arduino.h>
 #include <nrf_soc.h>
 #include <InternalFileSystem.h>
@@ -18,10 +19,18 @@ namespace rlr { namespace kiss {
 // ---- State -------------------------------------------------------
 
 static constexpr size_t FRAME_BUF_SIZE = 512;
+
+// Serial KISS parser state
 static uint8_t s_frame_buf[FRAME_BUF_SIZE];
 static size_t  s_frame_len = 0;
 static bool    s_in_frame  = false;
 static bool    s_escape    = false;
+
+// BLE KISS parser state (separate so interleaved bytes don't corrupt)
+static uint8_t s_ble_frame_buf[FRAME_BUF_SIZE];
+static size_t  s_ble_frame_len = 0;
+static bool    s_ble_in_frame  = false;
+static bool    s_ble_escape    = false;
 
 // Current radio config (set by host commands)
 static uint32_t s_freq_hz   = 0;
@@ -66,38 +75,79 @@ static uint8_t  s_tx_queue[TX_QUEUE_SIZE];
 static size_t   s_tx_queue_len = 0;
 static bool     s_tx_busy = false;
 
+// ---- Transport abstraction ----------------------------------------
+// Tracks which transport (Serial or BLE) sent the last command so
+// responses go back the same way. RX packets always go to both.
+
+enum Transport : uint8_t { TRANSPORT_SERIAL = 0, TRANSPORT_BLE = 1 };
+static Transport s_last_transport = TRANSPORT_SERIAL;
+
+static void _write_byte(uint8_t b, Transport t) {
+    if (t == TRANSPORT_BLE) {
+        rlr::ble::write(b);
+    } else {
+        Serial.write(b);
+    }
+}
+
+static void _write_buf(const uint8_t* buf, size_t len, Transport t) {
+    if (t == TRANSPORT_BLE) {
+        rlr::ble::write(buf, len);
+    } else {
+        Serial.write(buf, len);
+    }
+}
+
 // ---- KISS frame encoder ------------------------------------------
 
-void send_frame(uint8_t cmd, const uint8_t* data, size_t len) {
-    Serial.write(FEND);
-    Serial.write(cmd);
+// Send a frame on a specific transport
+static void _send_frame_on(uint8_t cmd, const uint8_t* data, size_t len, Transport t) {
+    _write_byte(FEND, t);
+    _write_byte(cmd, t);
     for (size_t i = 0; i < len; i++) {
         if (data[i] == FEND) {
-            Serial.write(FESC);
-            Serial.write(TFEND);
+            _write_byte(FESC, t);
+            _write_byte(TFEND, t);
         } else if (data[i] == FESC) {
-            Serial.write(FESC);
-            Serial.write(TFESC);
+            _write_byte(FESC, t);
+            _write_byte(TFESC, t);
         } else {
-            Serial.write(data[i]);
+            _write_byte(data[i], t);
         }
     }
-    Serial.write(FEND);
+    _write_byte(FEND, t);
+}
+
+void send_frame(uint8_t cmd, const uint8_t* data, size_t len) {
+    _send_frame_on(cmd, data, len, s_last_transport);
 }
 
 void send_byte(uint8_t cmd, uint8_t value) {
     send_frame(cmd, &value, 1);
 }
 
+// Helper: send a single-byte frame on a specific transport
+static void _send_byte_on(uint8_t cmd, uint8_t value, Transport t) {
+    _send_frame_on(cmd, &value, 1, t);
+}
+
 void send_rx_packet(const uint8_t* data, size_t len, float rssi, float snr) {
-    // RNode convention: RSSI first, SNR second, then DATA
+    // RX packets go to both Serial and BLE (if connected)
     uint8_t rssi_byte = (uint8_t)((int)rssi + RSSI_OFFSET);
-    send_byte(CMD_STAT_RSSI, rssi_byte);
+    int8_t snr_raw = (int8_t)(snr * 4.0f);
 
-    int8_t snr_raw = (int8_t)(snr * 4.0f);  // SNR * 4 as signed byte
-    send_byte(CMD_STAT_SNR, (uint8_t)snr_raw);
+    // Always send to Serial
+    _send_byte_on(CMD_STAT_RSSI, rssi_byte, TRANSPORT_SERIAL);
+    _send_byte_on(CMD_STAT_SNR, (uint8_t)snr_raw, TRANSPORT_SERIAL);
+    _send_frame_on(CMD_DATA, data, len, TRANSPORT_SERIAL);
 
-    send_frame(CMD_DATA, data, len);
+    // Also send to BLE if connected
+    if (rlr::ble::connected()) {
+        _send_byte_on(CMD_STAT_RSSI, rssi_byte, TRANSPORT_BLE);
+        _send_byte_on(CMD_STAT_SNR, (uint8_t)snr_raw, TRANSPORT_BLE);
+        _send_frame_on(CMD_DATA, data, len, TRANSPORT_BLE);
+    }
+
     s_rx_count++;
 }
 
@@ -497,17 +547,17 @@ void init() {
 }
 
 void tick() {
+    // Process Serial bytes
     while (Serial.available()) {
         uint8_t c = Serial.read();
 
         if (c == FEND) {
             if (s_in_frame && s_frame_len > 0) {
-                // End of frame — dispatch
+                s_last_transport = TRANSPORT_SERIAL;
                 uint8_t cmd = s_frame_buf[0];
                 dispatch_frame(cmd, s_frame_buf + 1, s_frame_len - 1);
                 s_frame_len = 0;
             }
-            // Start of new frame (or consecutive FENDs — both valid)
             s_in_frame = true;
             s_frame_len = 0;
             s_escape = false;
@@ -520,7 +570,6 @@ void tick() {
             s_escape = false;
             if (c == TFEND) c = FEND;
             else if (c == TFESC) c = FESC;
-            // else: protocol error, use byte as-is
         } else if (c == FESC) {
             s_escape = true;
             continue;
@@ -529,7 +578,41 @@ void tick() {
         if (s_frame_len < FRAME_BUF_SIZE) {
             s_frame_buf[s_frame_len++] = c;
         }
-        // else: overflow — frame will be truncated
+    }
+
+    // Process BLE bytes (same KISS parser, separate state)
+    while (rlr::ble::available()) {
+        int raw = rlr::ble::read();
+        if (raw < 0) break;
+        uint8_t c = (uint8_t)raw;
+
+        if (c == FEND) {
+            if (s_ble_in_frame && s_ble_frame_len > 0) {
+                s_last_transport = TRANSPORT_BLE;
+                uint8_t cmd = s_ble_frame_buf[0];
+                dispatch_frame(cmd, s_ble_frame_buf + 1, s_ble_frame_len - 1);
+                s_ble_frame_len = 0;
+            }
+            s_ble_in_frame = true;
+            s_ble_frame_len = 0;
+            s_ble_escape = false;
+            continue;
+        }
+
+        if (!s_ble_in_frame) continue;
+
+        if (s_ble_escape) {
+            s_ble_escape = false;
+            if (c == TFEND) c = FEND;
+            else if (c == TFESC) c = FESC;
+        } else if (c == FESC) {
+            s_ble_escape = true;
+            continue;
+        }
+
+        if (s_ble_frame_len < FRAME_BUF_SIZE) {
+            s_ble_frame_buf[s_ble_frame_len++] = c;
+        }
     }
 }
 

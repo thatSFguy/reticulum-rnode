@@ -14,6 +14,7 @@
 #include "Storage.h"
 #include "Eeprom.h"
 #include "Battery.h"
+#include "Ble.h"
 
 #ifndef RLR_VERSION
   #define RLR_VERSION "0.1.0-dev"
@@ -50,6 +51,9 @@ void setup() {
     rlr::storage::init();
     rlr::eeprom::init();
     rlr::battery::init();
+
+    // Initialize BLE with Nordic UART Service
+    rlr::ble::init(BOARD_NAME);
 
     // Initialize radio hardware (VEXT, SPI)
     if (!rlr::radio::init_hardware()) {

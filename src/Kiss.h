@@ -98,4 +98,7 @@ void send_byte(uint8_t cmd, uint8_t value);
 // Send an RX packet to the host (RSSI + SNR + DATA frames).
 void send_rx_packet(const uint8_t* data, size_t len, float rssi, float snr);
 
+// Drain queued TX packet (if any). Call from loop().
+void drain_tx_queue();
+
 }} // namespace rlr::kiss

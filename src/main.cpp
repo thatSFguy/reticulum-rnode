@@ -11,6 +11,9 @@
 #include "Radio.h"
 #include "Led.h"
 #include "Kiss.h"
+#include "Storage.h"
+#include "Eeprom.h"
+#include "Battery.h"
 
 #ifndef RLR_VERSION
   #define RLR_VERSION "0.1.0-dev"
@@ -43,6 +46,11 @@ void setup() {
 
     rlr::led::init();
 
+    // Initialize storage, EEPROM, and battery
+    rlr::storage::init();
+    rlr::eeprom::init();
+    rlr::battery::init();
+
     // Initialize radio hardware (VEXT, SPI)
     if (!rlr::radio::init_hardware()) {
         Serial.println("Setup: radio::init_hardware() failed");
@@ -58,17 +66,17 @@ void loop() {
     // Process incoming KISS frames from host
     rlr::kiss::tick();
 
+    // Drain queued TX packet
+    rlr::kiss::drain_tx_queue();
+
     // Check for radio RX packets and send to host
     if (rlr::radio::rx_pending()) {
         int n = rlr::radio::read_pending(rx_buf, sizeof(rx_buf));
         if (n > 0) {
             rlr::led::on();
-            // read_pending strips the RNode header and handles split
-            // reassembly. The returned data is the raw Reticulum payload.
-            // We need to get RSSI/SNR — but read_pending already consumed
-            // the radio state. For now, use the values logged by Radio.cpp.
-            // TODO: expose last_rssi/last_snr from Radio module
-            rlr::kiss::send_rx_packet((const uint8_t*)rx_buf, n, 0, 0);
+            rlr::kiss::send_rx_packet((const uint8_t*)rx_buf, n,
+                                      rlr::radio::last_rssi(),
+                                      rlr::radio::last_snr());
             rlr::led::off();
         }
     }

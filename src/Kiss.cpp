@@ -3,8 +3,11 @@
 #include "Kiss.h"
 #include "Radio.h"
 #include "Led.h"
+#include "Eeprom.h"
+#include "Battery.h"
 #include <Arduino.h>
 #include <nrf_soc.h>
+#include <InternalFileSystem.h>
 
 #ifndef RLR_VERSION
   #define RLR_VERSION "0.1.0-dev"
@@ -36,9 +39,32 @@ static constexpr uint8_t FW_MIN = 52;
 static uint32_t s_rx_count = 0;
 static uint32_t s_tx_count = 0;
 
-// Last RX signal quality (updated by read_pending in main loop)
-static float s_last_rssi = 0;
-static float s_last_snr  = 0;
+// ROM lock state (must be unlocked by host before ROM_WRITE)
+static bool s_rom_unlocked = false;
+
+// Standard RNode EEPROM address map (matches rnodeconf / webflasher)
+static constexpr uint16_t ADDR_PRODUCT   = 0x00;  // 1 byte
+static constexpr uint16_t ADDR_MODEL     = 0x01;  // 1 byte
+static constexpr uint16_t ADDR_HW_REV    = 0x02;  // 1 byte
+static constexpr uint16_t ADDR_SERIAL    = 0x03;  // 4 bytes
+static constexpr uint16_t ADDR_MADE      = 0x07;  // 4 bytes
+static constexpr uint16_t ADDR_CHKSUM    = 0x0B;  // 16 bytes (MD5)
+static constexpr uint16_t ADDR_SIGNATURE = 0x1B;  // 128 bytes
+static constexpr uint16_t ADDR_INFO_LOCK = 0x9B;  // 1 byte (0x73 = locked)
+static constexpr uint16_t ADDR_CONF_SF   = 0x9C;  // 1 byte
+static constexpr uint16_t ADDR_CONF_CR   = 0x9D;  // 1 byte
+static constexpr uint16_t ADDR_CONF_TXP  = 0x9E;  // 1 byte
+static constexpr uint16_t ADDR_CONF_BW   = 0x9F;  // 4 bytes
+static constexpr uint16_t ADDR_CONF_FREQ = 0xA3;  // 4 bytes
+static constexpr uint16_t ADDR_CONF_OK   = 0xA7;  // 1 byte (0x73 = valid)
+static constexpr uint16_t ADDR_FW_HASH   = 0xB0;  // 32 bytes
+
+// TX queue — single-slot buffer. When the radio is busy transmitting,
+// the next packet waits here. CMD_READY reports queue availability.
+static constexpr size_t TX_QUEUE_SIZE = 512;
+static uint8_t  s_tx_queue[TX_QUEUE_SIZE];
+static size_t   s_tx_queue_len = 0;
+static bool     s_tx_busy = false;
 
 // ---- KISS frame encoder ------------------------------------------
 
@@ -91,6 +117,60 @@ static void apply_radio_config() {
     rlr::radio::begin(cfg);
 }
 
+// ---- Config persistence ------------------------------------------
+
+static const char* CONF_FILE = "/radio_conf.dat";
+
+// Saved config layout: [freq_hz(4) bw_hz(4) sf(1) cr(1) txp_dbm(1)] = 11 bytes
+static constexpr size_t CONF_SIZE = 11;
+
+static void save_config() {
+    using namespace Adafruit_LittleFS_Namespace;
+    uint8_t buf[CONF_SIZE];
+    buf[0] = (s_freq_hz >> 24) & 0xFF;
+    buf[1] = (s_freq_hz >> 16) & 0xFF;
+    buf[2] = (s_freq_hz >>  8) & 0xFF;
+    buf[3] = (s_freq_hz >>  0) & 0xFF;
+    buf[4] = (s_bw_hz >> 24) & 0xFF;
+    buf[5] = (s_bw_hz >> 16) & 0xFF;
+    buf[6] = (s_bw_hz >>  8) & 0xFF;
+    buf[7] = (s_bw_hz >>  0) & 0xFF;
+    buf[8] = s_sf;
+    buf[9] = s_cr;
+    buf[10] = (uint8_t)s_txp_dbm;
+    File f(InternalFS);
+    if (f.open(CONF_FILE, FILE_O_WRITE)) {
+        f.seek(0);
+        f.write(buf, CONF_SIZE);
+        f.close();
+        Serial.println("KISS: config saved to flash");
+    }
+}
+
+static bool load_config() {
+    using namespace Adafruit_LittleFS_Namespace;
+    File f(InternalFS);
+    if (!f.open(CONF_FILE, FILE_O_READ)) return false;
+    uint8_t buf[CONF_SIZE];
+    size_t n = f.read(buf, CONF_SIZE);
+    f.close();
+    if (n < CONF_SIZE) return false;
+    s_freq_hz  = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+                 ((uint32_t)buf[2] << 8)  | (uint32_t)buf[3];
+    s_bw_hz    = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
+                 ((uint32_t)buf[6] << 8)  | (uint32_t)buf[7];
+    s_sf       = buf[8];
+    s_cr       = buf[9];
+    s_txp_dbm  = (int8_t)buf[10];
+    Serial.println("KISS: config loaded from flash");
+    return true;
+}
+
+static void delete_config() {
+    InternalFS.remove(CONF_FILE);
+    Serial.println("KISS: config deleted from flash");
+}
+
 static void send_uint32(uint8_t cmd, uint32_t value) {
     uint8_t buf[4];
     buf[0] = (value >> 24) & 0xFF;
@@ -108,13 +188,27 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
     case CMD_DATA:
         // TX packet via radio
         if (s_radio_on && len > 0) {
-            rlr::led::on();
-            int n = rlr::radio::transmit(data, len);
-            rlr::led::off();
-            if (n > 0) {
-                s_tx_count++;
+            if (s_tx_busy) {
+                // Radio is busy — queue the packet if the slot is free
+                if (s_tx_queue_len == 0 && len <= TX_QUEUE_SIZE) {
+                    memcpy(s_tx_queue, data, len);
+                    s_tx_queue_len = len;
+                } else {
+                    send_byte(CMD_ERROR, ERROR_QUEUE_FULL);
+                }
             } else {
-                send_byte(CMD_ERROR, ERROR_TXFAILED);
+                s_tx_busy = true;
+                rlr::led::on();
+                int n = rlr::radio::transmit(data, len);
+                rlr::led::off();
+                s_tx_busy = false;
+                if (n > 0) {
+                    s_tx_count++;
+                } else {
+                    send_byte(CMD_ERROR, ERROR_TXFAILED);
+                }
+                // Signal ready for next packet
+                send_byte(CMD_READY, s_tx_queue_len == 0 ? 0x01 : 0x00);
             }
         }
         break;
@@ -239,9 +333,12 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
         send_uint32(CMD_STAT_TX, s_tx_count);
         break;
 
+    case CMD_STAT_BAT:
+        send_byte(CMD_STAT_BAT, rlr::battery::level_percent());
+        break;
+
     case CMD_READY:
-        // Always ready (no TX queue in this implementation)
-        send_byte(CMD_READY, 0x01);
+        send_byte(CMD_READY, (!s_tx_busy && s_tx_queue_len == 0) ? 0x01 : 0x00);
         break;
 
     case CMD_BLINK:
@@ -271,6 +368,99 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
         }
         break;
 
+    case CMD_ROM_READ:
+        // Read from EEPROM: payload = [addr_hi, addr_lo, length]
+        if (len == 3) {
+            uint16_t addr = ((uint16_t)data[0] << 8) | data[1];
+            uint8_t rlen = data[2];
+            uint8_t rom_buf[256];
+            if (rlen > sizeof(rom_buf)) rlen = sizeof(rom_buf);
+            size_t n = rlr::eeprom::read(addr, rom_buf, rlen);
+            send_frame(CMD_ROM_READ, rom_buf, n);
+        }
+        break;
+
+    case CMD_ROM_WRITE:
+        // Write to EEPROM: payload = [addr_hi, addr_lo, data...]
+        if (len >= 3 && s_rom_unlocked) {
+            uint16_t addr = ((uint16_t)data[0] << 8) | data[1];
+            rlr::eeprom::write(addr, data + 2, len - 2);
+        } else if (!s_rom_unlocked) {
+            send_byte(CMD_ERROR, ERROR_EEPROM_LOCK);
+        }
+        break;
+
+    case CMD_UNLOCK_ROM:
+        if (len >= 1 && data[0] == 0xF8) {
+            s_rom_unlocked = true;
+        }
+        break;
+
+    case CMD_DEV_HASH:
+        {
+            // Device identity = product(1) + model(1) + hw_rev(1) + serial(4) + made(4) = 11 bytes
+            // Checksum (MD5 of identity) is at ADDR_CHKSUM, 16 bytes
+            uint8_t chksum[16];
+            rlr::eeprom::read(ADDR_CHKSUM, chksum, 16);
+            send_frame(CMD_DEV_HASH, chksum, 16);
+        }
+        break;
+
+    case CMD_DEV_SIG:
+        {
+            // Device signature at ADDR_SIGNATURE, 128 bytes
+            uint8_t sig[128];
+            rlr::eeprom::read(ADDR_SIGNATURE, sig, 128);
+            send_frame(CMD_DEV_SIG, sig, 128);
+        }
+        break;
+
+    case CMD_FW_HASH:
+        {
+            // Firmware hash at ADDR_FW_HASH, 32 bytes
+            uint8_t fwhash[32];
+            rlr::eeprom::read(ADDR_FW_HASH, fwhash, 32);
+            send_frame(CMD_FW_HASH, fwhash, 32);
+        }
+        break;
+
+    case CMD_HASHES:
+        {
+            // Combined: checksum(16) + fw_hash(32) = 48 bytes
+            uint8_t hashes[48];
+            rlr::eeprom::read(ADDR_CHKSUM, hashes, 16);
+            rlr::eeprom::read(ADDR_FW_HASH, hashes + 16, 32);
+            send_frame(CMD_HASHES, hashes, 48);
+        }
+        break;
+
+    case CMD_CONF_SAVE:
+        save_config();
+        break;
+
+    case CMD_CONF_DELETE:
+        delete_config();
+        break;
+
+    case CMD_CFG_READ:
+        {
+            // Return current radio config as a blob
+            uint8_t cfg_buf[CONF_SIZE];
+            cfg_buf[0] = (s_freq_hz >> 24) & 0xFF;
+            cfg_buf[1] = (s_freq_hz >> 16) & 0xFF;
+            cfg_buf[2] = (s_freq_hz >>  8) & 0xFF;
+            cfg_buf[3] = (s_freq_hz >>  0) & 0xFF;
+            cfg_buf[4] = (s_bw_hz >> 24) & 0xFF;
+            cfg_buf[5] = (s_bw_hz >> 16) & 0xFF;
+            cfg_buf[6] = (s_bw_hz >>  8) & 0xFF;
+            cfg_buf[7] = (s_bw_hz >>  0) & 0xFF;
+            cfg_buf[8] = s_sf;
+            cfg_buf[9] = s_cr;
+            cfg_buf[10] = (uint8_t)s_txp_dbm;
+            send_frame(CMD_CFG_READ, cfg_buf, CONF_SIZE);
+        }
+        break;
+
     case CMD_LEAVE:
         // Host disconnecting — nothing to do
         break;
@@ -288,6 +478,21 @@ void init() {
     s_in_frame  = false;
     s_escape    = false;
     s_radio_on  = false;
+
+    // Try to load saved radio config from flash
+    if (load_config()) {
+        Serial.print("KISS: restored config freq=");
+        Serial.print(s_freq_hz);
+        Serial.print(" bw=");
+        Serial.print(s_bw_hz);
+        Serial.print(" sf=");
+        Serial.print(s_sf);
+        Serial.print(" cr=");
+        Serial.print(s_cr);
+        Serial.print(" txp=");
+        Serial.println(s_txp_dbm);
+    }
+
     Serial.println("KISS: ready");
 }
 
@@ -326,6 +531,24 @@ void tick() {
         }
         // else: overflow — frame will be truncated
     }
+}
+
+void drain_tx_queue() {
+    if (s_tx_queue_len == 0 || s_tx_busy || !s_radio_on) return;
+
+    s_tx_busy = true;
+    rlr::led::on();
+    int n = rlr::radio::transmit(s_tx_queue, s_tx_queue_len);
+    rlr::led::off();
+    s_tx_busy = false;
+    s_tx_queue_len = 0;
+
+    if (n > 0) {
+        s_tx_count++;
+    } else {
+        send_byte(CMD_ERROR, ERROR_TXFAILED);
+    }
+    send_byte(CMD_READY, 0x01);
 }
 
 }} // namespace rlr::kiss

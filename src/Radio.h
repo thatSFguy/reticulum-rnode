@@ -38,6 +38,10 @@ bool online();
 // Put the radio into sleep/standby. Reversible via begin().
 void stop();
 
+// Last-received signal quality (updated after each successful read_pending).
+float last_rssi();
+float last_snr();
+
 // Called from loop(): returns true if the ISR has latched a packet
 // that is ready to be drained via read_pending().
 bool rx_pending();
@@ -48,9 +52,17 @@ bool rx_pending();
 // packets are captured. `bufsize` should be at least 256 for safety.
 int read_pending(uint8_t* buf, size_t bufsize);
 
-// Synchronously transmit a packet. Blocks until the chip reports
-// TX done, then re-enters continuous RX. Returns the number of bytes
-// transmitted on success, -1 on error.
+// Read the current channel RSSI in dBm (instantaneous).
+float read_rssi();
+
+// Returns true if the channel is currently clear (RSSI below threshold).
+// Uses CSMA_RSSI_THRESHOLD_DBM as the decision threshold.
+bool channel_clear();
+
+// Synchronously transmit a packet with CSMA/CA. Performs carrier sense
+// before transmitting: if the channel is busy, backs off with random
+// delay and retries up to CSMA_MAX_RETRIES times. Returns the number
+// of bytes transmitted on success, -1 on error.
 int transmit(const uint8_t* buf, size_t len);
 
 }} // namespace rlr::radio

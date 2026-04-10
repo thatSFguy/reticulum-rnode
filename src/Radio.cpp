@@ -51,6 +51,9 @@ static uint32_t s_split_ms  = 0;     // millis() when first half arrived
 // chip-internal IRQ to DIO1 AND attaches this handler via
 // attachInterrupt() under the hood — both steps happen atomically
 // so there's no ordering hazard like the old driver had.
+static float s_last_rssi = 0;
+static float s_last_snr  = 0;
+
 static volatile bool s_rx_flag = false;
 static void isr_packet_received() {
     s_rx_flag = true;
@@ -178,6 +181,8 @@ bool start_rx() {
 }
 
 bool online()     { return s_online; }
+float last_rssi() { return s_last_rssi; }
+float last_snr()  { return s_last_snr; }
 bool rx_pending() { return s_rx_flag; }
 
 void stop() {
@@ -213,6 +218,8 @@ int read_pending(uint8_t* buf, size_t bufsize) {
     int state = s_radio.readData(rx_tmp, len);
     float rssi = s_radio.getRSSI();
     float snr  = s_radio.getSNR();
+    s_last_rssi = rssi;
+    s_last_snr  = snr;
 
     // Re-enter RX immediately so we don't miss the second half of a split
     s_radio.startReceive();
@@ -315,6 +322,20 @@ int read_pending(uint8_t* buf, size_t bufsize) {
     return (int)payload_len;
 }
 
+// ---- CSMA/CA parameters -------------------------------------------
+static constexpr float  CSMA_RSSI_THRESHOLD_DBM = -90.0f;
+static constexpr int    CSMA_MAX_RETRIES         = 5;
+static constexpr int    CSMA_SLOT_MS_MIN         = 10;
+static constexpr int    CSMA_SLOT_MS_MAX         = 50;
+
+float read_rssi() {
+    return s_radio.getRSSI(false);  // false = scan mode (not last packet)
+}
+
+bool channel_clear() {
+    return read_rssi() < CSMA_RSSI_THRESHOLD_DBM;
+}
+
 // Internal: force standby with recovery if SPI fails
 static void _ensure_standby() {
     int state = s_radio.standby();
@@ -357,6 +378,17 @@ int transmit(const uint8_t* buf, size_t len) {
     // Split frame:  two frames with same header (random seq + FLAG_SPLIT)
     //   Frame 1: header + first 254 bytes
     //   Frame 2: header + remaining bytes
+
+    // CSMA/CA: wait for channel to be clear before transmitting
+    for (int attempt = 0; attempt < CSMA_MAX_RETRIES; attempt++) {
+        if (channel_clear()) break;
+        if (attempt == CSMA_MAX_RETRIES - 1) {
+            Serial.println("Radio: CSMA gave up, TX anyway");
+        } else {
+            int backoff = CSMA_SLOT_MS_MIN + random(CSMA_SLOT_MS_MAX - CSMA_SLOT_MS_MIN);
+            delay(backoff);
+        }
+    }
 
     _ensure_standby();
 

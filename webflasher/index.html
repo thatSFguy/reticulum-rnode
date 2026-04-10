@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>reticulum-rnode Webflasher</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/md5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="js/rnode.js"></script>
+    <script src="js/nrf52_dfu.js"></script>
+    <style>
+        [v-cloak] { display: none; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+<div id="app" v-cloak>
+
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
+        <div class="max-w-4xl mx-auto flex items-center justify-between">
+            <div>
+                <h1 class="text-xl font-bold text-white">reticulum-rnode</h1>
+                <p class="text-sm text-gray-400">Webflasher &amp; Provisioning Tool</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span v-if="connected" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-900 text-green-300">
+                    <span class="w-2 h-2 rounded-full bg-green-400"></span>
+                    Connected
+                </span>
+                <span v-else class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-700 text-gray-400">
+                    <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+                    Disconnected
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto px-6 py-8">
+
+        <!-- Browser check -->
+        <div v-if="!webSerialSupported" class="bg-red-900/50 border border-red-700 rounded-lg p-6 text-center">
+            <h2 class="text-lg font-semibold text-red-300 mb-2">Web Serial Not Supported</h2>
+            <p class="text-gray-300">This tool requires the Web Serial API. Please use <strong>Chrome</strong>, <strong>Edge</strong>, or <strong>Opera</strong> on desktop.</p>
+        </div>
+
+        <div v-else>
+
+            <!-- Step navigation -->
+            <div class="flex gap-2 mb-8">
+                <button v-for="(s, i) in steps" :key="i"
+                    @click="canNavigateTo(i) && (step = i)"
+                    :class="[
+                        'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                        step === i ? 'bg-blue-600 text-white' :
+                        canNavigateTo(i) ? 'bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer' :
+                        'bg-gray-800 text-gray-600 cursor-not-allowed'
+                    ]">
+                    {{ s }}
+                </button>
+            </div>
+
+            <!-- Step 0: Connect -->
+            <div v-if="step === 0">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold mb-4">1. Connect to RNode</h2>
+                    <p class="text-gray-400 mb-6">Connect your nRF52840 board via USB. Make sure no other application (serial monitor, rnsd) is using the port.</p>
+
+                    <div class="flex gap-3">
+                        <button @click="connectDevice" :disabled="connecting"
+                            class="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors">
+                            {{ connecting ? 'Connecting...' : 'Connect' }}
+                        </button>
+                        <button v-if="connected" @click="disconnectDevice"
+                            class="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg font-medium transition-colors">
+                            Disconnect
+                        </button>
+                    </div>
+
+                    <!-- Device info card -->
+                    <div v-if="deviceInfo" class="mt-6 bg-gray-900 rounded-lg p-5 grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Board</p>
+                            <p class="text-sm text-white font-medium">{{ deviceInfo.boardName }}</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Firmware</p>
+                            <p class="text-sm text-white font-medium">{{ deviceInfo.fwVersion }}</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Platform</p>
+                            <p class="text-sm text-white font-medium">{{ deviceInfo.platformName }}</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Battery</p>
+                            <p class="text-sm text-white font-medium">{{ deviceInfo.battery !== null ? deviceInfo.battery + '%' : 'N/A' }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 1: Flash firmware -->
+            <div v-if="step === 1">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold mb-4">2. Flash Firmware</h2>
+                    <p class="text-gray-400 mb-6">Upload a firmware .zip package (produced by <code class="text-blue-400">pio run</code>). The device will enter DFU mode, flash, and reboot automatically.</p>
+
+                    <div class="mb-6">
+                        <label class="block text-sm text-gray-400 mb-2">Firmware package (.zip)</label>
+                        <input type="file" accept=".zip" @change="onFirmwareFileSelected"
+                            class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-500 file:cursor-pointer" />
+                    </div>
+
+                    <button @click="flashFirmware" :disabled="!firmwareFile || flashing"
+                        class="px-6 py-2.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors">
+                        {{ flashing ? 'Flashing...' : 'Flash Firmware' }}
+                    </button>
+
+                    <!-- Progress bar -->
+                    <div v-if="flashProgress > 0" class="mt-6">
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>{{ flashStatus }}</span>
+                            <span>{{ flashProgress }}%</span>
+                        </div>
+                        <div class="w-full bg-gray-700 rounded-full h-2">
+                            <div class="bg-orange-500 h-2 rounded-full transition-all duration-300"
+                                :style="{ width: flashProgress + '%' }"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Provision -->
+            <div v-if="step === 2">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold mb-4">3. Provision Identity</h2>
+                    <p class="text-gray-400 mb-6">Write device identity to EEPROM. This data is used by Reticulum's RNodeInterface for device authentication.</p>
+
+                    <!-- Current identity -->
+                    <div v-if="identity" class="mb-6 bg-gray-900 rounded-lg p-5">
+                        <h3 class="text-sm font-semibold text-gray-300 mb-3">Current Identity</h3>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                                <span class="text-gray-500">Product:</span>
+                                <span class="text-white ml-2">0x{{ identity.product.toString(16).padStart(2, '0') }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-500">Model:</span>
+                                <span class="text-white ml-2">0x{{ identity.model.toString(16).padStart(2, '0') }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-500">HW Rev:</span>
+                                <span class="text-white ml-2">{{ identity.hwRev }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-500">Serial:</span>
+                                <span class="text-white ml-2">{{ identity.serial }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-500">Checksum:</span>
+                                <span class="text-white ml-2 font-mono text-xs">{{ identity.checksum }}</span>
+                            </div>
+                            <div>
+                                <span class="text-gray-500">Locked:</span>
+                                <span :class="identity.locked ? 'text-green-400' : 'text-yellow-400'" class="ml-2">
+                                    {{ identity.locked ? 'Yes' : 'No' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Provision form -->
+                    <div class="space-y-4 mb-6">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Board</label>
+                            <select v-model="provBoard" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+                                <option v-for="(b, id) in boards" :key="id" :value="id">
+                                    {{ b.name }} (product=0x{{ b.product.toString(16) }}, model=0x{{ b.model.toString(16) }})
+                                </option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">HW Revision</label>
+                                <input v-model.number="provHwRev" type="number" min="0" max="255"
+                                    class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white" />
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Serial Number</label>
+                                <input v-model.number="provSerial" type="number" min="0"
+                                    class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button @click="readIdentity" :disabled="!connected || provisioning"
+                            class="px-5 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                            Read Identity
+                        </button>
+                        <button @click="writeIdentity" :disabled="!connected || provisioning"
+                            class="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
+                            {{ provisioning ? 'Writing...' : 'Write Identity' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Radio Config -->
+            <div v-if="step === 3">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold mb-4">4. Radio Configuration</h2>
+                    <p class="text-gray-400 mb-6">Set radio parameters. These are normally configured by the Reticulum host, but you can set defaults here and save them to flash.</p>
+
+                    <div class="space-y-4 mb-6">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Frequency (Hz)</label>
+                                <input v-model.number="radioFreq" type="number"
+                                    class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white" />
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Bandwidth (Hz)</label>
+                                <select v-model.number="radioBw" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+                                    <option :value="7800">7.8 kHz</option>
+                                    <option :value="10400">10.4 kHz</option>
+                                    <option :value="15600">15.6 kHz</option>
+                                    <option :value="20800">20.8 kHz</option>
+                                    <option :value="31250">31.25 kHz</option>
+                                    <option :value="41700">41.7 kHz</option>
+                                    <option :value="62500">62.5 kHz</option>
+                                    <option :value="125000">125 kHz</option>
+                                    <option :value="250000">250 kHz</option>
+                                    <option :value="500000">500 kHz</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Spreading Factor</label>
+                                <select v-model.number="radioSf" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+                                    <option v-for="sf in [7,8,9,10,11,12]" :key="sf" :value="sf">SF{{ sf }}</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">Coding Rate</label>
+                                <select v-model.number="radioCr" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+                                    <option v-for="cr in [5,6,7,8]" :key="cr" :value="cr">4/{{ cr }}</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-400 mb-1">TX Power (dBm)</label>
+                                <input v-model.number="radioTxp" type="number" min="-9" max="22"
+                                    class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button @click="readRadioConfig" :disabled="!connected"
+                            class="px-5 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                            Read Config
+                        </button>
+                        <button @click="applyRadioConfig" :disabled="!connected"
+                            class="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
+                            Apply
+                        </button>
+                        <button @click="saveRadioConfig" :disabled="!connected"
+                            class="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
+                            Save to Flash
+                        </button>
+                        <button @click="deleteRadioConfig" :disabled="!connected"
+                            class="px-5 py-2 bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
+                            Delete Saved
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Tools -->
+            <div v-if="step === 4">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold mb-4">5. Tools</h2>
+
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <button @click="blinkDevice" :disabled="!connected"
+                            class="p-4 bg-gray-900 hover:bg-gray-700 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-lg text-left transition-colors">
+                            <p class="text-sm font-medium text-white">Blink LED</p>
+                            <p class="text-xs text-gray-400 mt-1">Flash the LED 3 times to identify the device</p>
+                        </button>
+                        <button @click="resetDevice" :disabled="!connected"
+                            class="p-4 bg-gray-900 hover:bg-gray-700 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-lg text-left transition-colors">
+                            <p class="text-sm font-medium text-white">Reset Device</p>
+                            <p class="text-xs text-gray-400 mt-1">Reboot the device</p>
+                        </button>
+                        <button @click="readHashes" :disabled="!connected"
+                            class="p-4 bg-gray-900 hover:bg-gray-700 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-lg text-left transition-colors">
+                            <p class="text-sm font-medium text-white">Read Hashes</p>
+                            <p class="text-xs text-gray-400 mt-1">Device checksum + firmware hash</p>
+                        </button>
+                        <button @click="dumpEeprom" :disabled="!connected"
+                            class="p-4 bg-gray-900 hover:bg-gray-700 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-lg text-left transition-colors">
+                            <p class="text-sm font-medium text-white">Dump EEPROM</p>
+                            <p class="text-xs text-gray-400 mt-1">Read first 256 bytes of EEPROM</p>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Log panel -->
+            <div class="mt-6 bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-sm font-semibold text-gray-400">Log</h3>
+                    <button @click="logMessages = []" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
+                </div>
+                <div class="bg-gray-900 rounded-lg p-3 h-48 overflow-y-auto font-mono text-xs" ref="logPanel">
+                    <div v-for="(msg, i) in logMessages" :key="i"
+                        :class="msg.startsWith('ERROR') ? 'text-red-400' : msg.startsWith('OK') ? 'text-green-400' : 'text-gray-400'">
+                        {{ msg }}
+                    </div>
+                    <div v-if="logMessages.length === 0" class="text-gray-600">No log messages yet.</div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-xs text-gray-600 py-6">
+        <a href="https://github.com/thatSFguy/reticulum-rnode" class="hover:text-gray-400">reticulum-rnode</a>
+        &middot; Web Serial flasher for nRF52840 + SX1262 RNode firmware
+    </footer>
+
+</div>
+
+<script>
+const { createApp, ref, computed, watch, nextTick, onMounted } = Vue;
+
+createApp({
+    setup() {
+        // State
+        const webSerialSupported = ref('serial' in navigator);
+        const step = ref(0);
+        const steps = ref(['Connect', 'Flash', 'Provision', 'Radio', 'Tools']);
+        const connected = ref(false);
+        const connecting = ref(false);
+        const logMessages = ref([]);
+        const logPanel = ref(null);
+
+        // Device state
+        const rnode = new RNode();
+        const deviceInfo = ref(null);
+        let serialPort = null;
+
+        // Flash state
+        const firmwareFile = ref(null);
+        const flashing = ref(false);
+        const flashProgress = ref(0);
+        const flashStatus = ref('');
+
+        // Provision state
+        const identity = ref(null);
+        const provisioning = ref(false);
+        const boards = ref(BOARDS);
+        const provBoard = ref(0x52);  // default Faketec
+        const provHwRev = ref(1);
+        const provSerial = ref(1);
+
+        // Radio config state
+        const radioFreq = ref(915000000);
+        const radioBw   = ref(125000);
+        const radioSf   = ref(10);
+        const radioCr   = ref(5);
+        const radioTxp  = ref(22);
+
+        // Helpers
+        function log(msg) {
+            logMessages.value.push(msg);
+            nextTick(() => {
+                if (logPanel.value) logPanel.value.scrollTop = logPanel.value.scrollHeight;
+            });
+        }
+
+        function canNavigateTo(i) {
+            if (i === 0) return true;
+            if (i === 1) return true;  // flash can work without prior connect
+            return connected.value;
+        }
+
+        // ---- Connect --------------------------------------------------
+
+        async function connectDevice() {
+            try {
+                connecting.value = true;
+                log("Requesting serial port...");
+                serialPort = await navigator.serial.requestPort();
+                rnode._onLog = log;
+                await rnode.connect(serialPort);
+                connected.value = true;
+                log("OK Port opened at 115200 baud");
+
+                // Probe device
+                log("Detecting RNode...");
+                const detected = await rnode.detect();
+                if (!detected) {
+                    log("ERROR: RNode detect handshake failed");
+                    return;
+                }
+                log("OK RNode detected");
+
+                const fw = await rnode.getFirmwareVersion();
+                const platform = await rnode.getPlatform();
+                const board = await rnode.getBoard();
+                const battery = await rnode.getBattery();
+
+                const boardInfo = BOARDS[board] || { name: `Unknown (0x${board?.toString(16)})` };
+                const platformName = platform === PLATFORM_NRF52 ? "nRF52" : `0x${platform?.toString(16)}`;
+
+                deviceInfo.value = {
+                    fwVersion: fw ? `${fw.major}.${fw.minor}` : 'Unknown',
+                    platformName,
+                    boardName: boardInfo.name,
+                    boardId: board,
+                    battery,
+                };
+
+                log(`OK Board: ${boardInfo.name}, FW: ${deviceInfo.value.fwVersion}, Battery: ${battery}%`);
+
+                // Auto-select board for provisioning
+                if (board && BOARDS[board]) {
+                    provBoard.value = board;
+                }
+            } catch (e) {
+                log("ERROR: " + e.message);
+            } finally {
+                connecting.value = false;
+            }
+        }
+
+        async function disconnectDevice() {
+            try {
+                await rnode.disconnect();
+            } catch {}
+            connected.value = false;
+            deviceInfo.value = null;
+            serialPort = null;
+            log("Disconnected");
+        }
+
+        // ---- Flash ----------------------------------------------------
+
+        function onFirmwareFileSelected(event) {
+            firmwareFile.value = event.target.files[0] || null;
+        }
+
+        async function flashFirmware() {
+            if (!firmwareFile.value) return;
+
+            try {
+                flashing.value = true;
+                flashProgress.value = 0;
+                flashStatus.value = "Starting...";
+
+                // Disconnect RNode first if connected
+                if (connected.value) {
+                    log("Disconnecting RNode for DFU...");
+                    await rnode.disconnect();
+                    connected.value = false;
+                    deviceInfo.value = null;
+                }
+
+                // Need to get the port for DFU
+                if (!serialPort) {
+                    log("Requesting serial port for DFU...");
+                    serialPort = await navigator.serial.requestPort();
+                }
+
+                const zipData = await firmwareFile.value.arrayBuffer();
+                const flasher = new NRF52DfuFlasher();
+
+                await flasher.flash(
+                    serialPort,
+                    zipData,
+                    (pct, msg) => { flashProgress.value = pct; flashStatus.value = msg; },
+                    log
+                );
+
+                log("OK Flash complete! Device will reboot.");
+                flashStatus.value = "Flash complete!";
+
+                // Wait for device to reboot then reconnect
+                log("Waiting for device to reboot (3s)...");
+                await new Promise(r => setTimeout(r, 3000));
+
+                serialPort = null;  // port is stale after DFU
+            } catch (e) {
+                log("ERROR: Flash failed: " + e.message);
+                flashStatus.value = "Flash failed";
+            } finally {
+                flashing.value = false;
+            }
+        }
+
+        // ---- Provision ------------------------------------------------
+
+        async function readIdentity() {
+            try {
+                log("Reading device identity...");
+                identity.value = await rnode.readIdentity();
+                log("OK Identity read");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function writeIdentity() {
+            try {
+                provisioning.value = true;
+                const board = BOARDS[provBoard.value];
+                if (!board) {
+                    log("ERROR: Unknown board selected");
+                    return;
+                }
+
+                const timestamp = Math.floor(Date.now() / 1000);
+                log(`Provisioning: product=0x${board.product.toString(16)}, model=0x${board.model.toString(16)}, hw=${provHwRev.value}, serial=${provSerial.value}`);
+
+                await rnode.writeIdentity(
+                    board.product,
+                    board.model,
+                    provHwRev.value,
+                    provSerial.value,
+                    timestamp
+                );
+
+                log("OK Identity written and locked");
+
+                // Re-read to confirm
+                await readIdentity();
+            } catch (e) {
+                log("ERROR: " + e.message);
+            } finally {
+                provisioning.value = false;
+            }
+        }
+
+        // ---- Radio config ---------------------------------------------
+
+        async function readRadioConfig() {
+            try {
+                log("Reading radio config...");
+                const freq = await rnode.getFrequency();
+                const bw   = await rnode.getBandwidth();
+                const sf   = await rnode.getSpreadingFactor();
+                const cr   = await rnode.getCodingRate();
+                const txp  = await rnode.getTxPower();
+
+                if (freq) radioFreq.value = freq;
+                if (bw) radioBw.value = bw;
+                if (sf) radioSf.value = sf;
+                if (cr) radioCr.value = cr;
+                if (txp !== null) radioTxp.value = txp;
+
+                log(`OK Config: freq=${freq} bw=${bw} sf=${sf} cr=${cr} txp=${txp}`);
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function applyRadioConfig() {
+            try {
+                log("Applying radio config...");
+                await rnode.setFrequency(radioFreq.value);
+                await rnode.setBandwidth(radioBw.value);
+                await rnode.setSpreadingFactor(radioSf.value);
+                await rnode.setCodingRate(radioCr.value);
+                await rnode.setTxPower(radioTxp.value);
+                log("OK Radio config applied");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function saveRadioConfig() {
+            try {
+                await applyRadioConfig();
+                await rnode.saveConfig();
+                log("OK Config saved to flash");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function deleteRadioConfig() {
+            try {
+                await rnode.deleteConfig();
+                log("OK Saved config deleted from flash");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        // ---- Tools ----------------------------------------------------
+
+        async function blinkDevice() {
+            try {
+                await rnode.blink(3);
+                log("OK Blink sent");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function resetDevice() {
+            try {
+                log("Resetting device...");
+                await rnode.reset();
+                log("OK Reset command sent — device will reboot");
+                connected.value = false;
+                deviceInfo.value = null;
+                serialPort = null;
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function readHashes() {
+            try {
+                log("Reading hashes...");
+                const devHash = await rnode.getDevHash();
+                const fwHash  = await rnode.getFwHash();
+                const devHex = Array.from(devHash).map(b => b.toString(16).padStart(2, '0')).join('');
+                const fwHex  = Array.from(fwHash).map(b => b.toString(16).padStart(2, '0')).join('');
+                log("Dev checksum: " + devHex);
+                log("FW hash:      " + fwHex);
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        async function dumpEeprom() {
+            try {
+                log("Reading EEPROM (first 256 bytes)...");
+                let hex = '';
+                for (let addr = 0; addr < 256; addr += 32) {
+                    const data = await rnode.romRead(addr, 32);
+                    const line = Array.from(data).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                    const addrHex = addr.toString(16).padStart(4, '0');
+                    log(`${addrHex}: ${line}`);
+                }
+                log("OK EEPROM dump complete");
+            } catch (e) {
+                log("ERROR: " + e.message);
+            }
+        }
+
+        return {
+            webSerialSupported, step, steps, connected, connecting,
+            logMessages, logPanel,
+            deviceInfo,
+            firmwareFile, flashing, flashProgress, flashStatus,
+            identity, provisioning, boards, provBoard, provHwRev, provSerial,
+            radioFreq, radioBw, radioSf, radioCr, radioTxp,
+            canNavigateTo,
+            connectDevice, disconnectDevice,
+            onFirmwareFileSelected, flashFirmware,
+            readIdentity, writeIdentity,
+            readRadioConfig, applyRadioConfig, saveRadioConfig, deleteRadioConfig,
+            blinkDevice, resetDevice, readHashes, dumpEeprom,
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>

@@ -1,5 +1,42 @@
 {
   "project": "reticulum-rnode",
   "generated": "2026-04-09T00:00:00Z",
-  "releases": []
+  "releases": [
+    {
+      "tag": "v0.1.0",
+      "prerelease": false,
+      "boards": [
+        {
+          "name": "Faketec",
+          "zip_path": "firmware/v0.1.0/firmware-Faketec.zip",
+          "zip_size": 183528,
+          "uf2_path": "firmware/v0.1.0/firmware-Faketec.uf2"
+        },
+        {
+          "name": "RAK4631",
+          "zip_path": "firmware/v0.1.0/firmware-RAK4631.zip",
+          "zip_size": 183288,
+          "uf2_path": "firmware/v0.1.0/firmware-RAK4631.uf2"
+        },
+        {
+          "name": "XIAO_nRF52840",
+          "zip_path": "firmware/v0.1.0/firmware-XIAO_nRF52840.zip",
+          "zip_size": 183496,
+          "uf2_path": "firmware/v0.1.0/firmware-XIAO_nRF52840.uf2"
+        },
+        {
+          "name": "Heltec_T114",
+          "zip_path": "firmware/v0.1.0/firmware-Heltec_T114.zip",
+          "zip_size": 183304,
+          "uf2_path": "firmware/v0.1.0/firmware-Heltec_T114.uf2"
+        },
+        {
+          "name": "RAK3401",
+          "zip_path": "firmware/v0.1.0/firmware-RAK3401.zip",
+          "zip_size": 183304,
+          "uf2_path": "firmware/v0.1.0/firmware-RAK3401.uf2"
+        }
+      ]
+    }
+  ]
 }

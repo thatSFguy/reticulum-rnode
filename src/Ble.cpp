@@ -94,14 +94,17 @@ static char    s_devname[12];  // "RNode XXXX\0"
 // ---- Callbacks ------------------------------------------------------
 
 static void _connect_callback(uint16_t conn_handle) {
+    // Don't set s_connected here — too early. The central hasn't
+    // subscribed to NUS TX notifications yet, so writes would be lost.
+    // We set s_connected in _secured_callback (after bonding) or
+    // _notify_callback (when central subscribes to TX).
     BLEConnection* conn = Bluefruit.Connection(conn_handle);
     if (conn) {
         conn->requestPHY(BLE_GAP_PHY_2MBPS);
         conn->requestMtuExchange(515);
         conn->requestDataLengthUpdate();
     }
-    s_connected = true;
-    Serial.println("BLE: central connected");
+    Serial.println("BLE: central connected (waiting for bond + notify)");
 }
 
 static void _disconnect_callback(uint16_t conn_handle, uint8_t reason) {
@@ -109,6 +112,28 @@ static void _disconnect_callback(uint16_t conn_handle, uint8_t reason) {
     s_connected = false;
     Serial.print("BLE: disconnected, reason=0x");
     Serial.println(reason, HEX);
+}
+
+// Fired when security/bonding completes (Just Works or MITM).
+// In the official RNode firmware, BT_STATE_CONNECTED is set here.
+static void _secured_callback(uint16_t conn_handle) {
+    (void)conn_handle;
+    Serial.println("BLE: bonded/secured");
+    // Don't set s_connected yet — wait for notify subscription
+}
+
+// Fired when the central subscribes/unsubscribes to NUS TX notifications.
+// This is the safest point to enable the transport — the central is
+// ready to receive KISS responses.
+static void _notify_callback(uint16_t conn_hdl, bool enabled) {
+    (void)conn_hdl;
+    if (enabled) {
+        s_connected = true;
+        Serial.println("BLE: TX notify enabled — transport active");
+    } else {
+        s_connected = false;
+        Serial.println("BLE: TX notify disabled — transport inactive");
+    }
 }
 
 // ---- Public API -----------------------------------------------------
@@ -140,6 +165,7 @@ void init(const char* device_name) {
     // Security: Just Works bonding
     Bluefruit.Security.setIOCaps(false, false, false);
     Bluefruit.Security.setMITM(false);
+    Bluefruit.Security.setSecuredCallback(_secured_callback);
 
     // Device Information Service
     s_ble_dis.setManufacturer(BOARD_MANUFACTURER);
@@ -151,6 +177,7 @@ void init(const char* device_name) {
 
     // Nordic UART Service — buffered TXD for frame-level flushing
     s_ble_uart.bufferTXD(true);
+    s_ble_uart.setNotifyCallback(_notify_callback);
     s_ble_uart.begin();
 
     // Advertising: NUS UUID in adv packet, name in scan response

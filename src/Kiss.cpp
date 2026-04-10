@@ -147,6 +147,12 @@ void send_rx_packet(const uint8_t* data, size_t len, float rssi, float snr) {
     _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, t);
     _send_frame_on(CMD_DATA, data, len, t);
     s_rx_count++;
+
+    // Yield to FreeRTOS scheduler so the SoftDevice can process
+    // BLE connection events between RX packets
+    if (t == TRANSPORT_BLE) {
+        delay(1);
+    }
 }
 
 // ---- Helpers -----------------------------------------------------
@@ -301,7 +307,6 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
         if (len == 4) {
             s_freq_hz = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
                         ((uint32_t)data[2] << 8)  | (uint32_t)data[3];
-            apply_radio_config();
             send_uint32(CMD_FREQUENCY, s_freq_hz);
         } else if (len >= 1 && data[0] == 0x00) {
             send_uint32(CMD_FREQUENCY, s_freq_hz);
@@ -312,7 +317,6 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
         if (len == 4) {
             s_bw_hz = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
                       ((uint32_t)data[2] << 8)  | (uint32_t)data[3];
-            apply_radio_config();
             send_uint32(CMD_BANDWIDTH, s_bw_hz);
         } else if (len >= 1 && data[0] == 0x00) {
             send_uint32(CMD_BANDWIDTH, s_bw_hz);
@@ -322,7 +326,6 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
     case CMD_TXPOWER:
         if (len == 1 && data[0] != 0xFF) {
             s_txp_dbm = (int8_t)data[0];
-            apply_radio_config();
             send_byte(CMD_TXPOWER, (uint8_t)s_txp_dbm);
         } else if (len >= 1 && data[0] == 0xFF) {
             send_byte(CMD_TXPOWER, (uint8_t)s_txp_dbm);
@@ -332,7 +335,6 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
     case CMD_SF:
         if (len == 1 && data[0] != 0xFF) {
             s_sf = data[0];
-            apply_radio_config();
             send_byte(CMD_SF, s_sf);
         } else if (len >= 1 && data[0] == 0xFF) {
             send_byte(CMD_SF, s_sf);
@@ -342,7 +344,6 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
     case CMD_CR:
         if (len == 1 && data[0] != 0xFF) {
             s_cr = data[0];
-            apply_radio_config();
             send_byte(CMD_CR, s_cr);
         } else if (len >= 1 && data[0] == 0xFF) {
             send_byte(CMD_CR, s_cr);

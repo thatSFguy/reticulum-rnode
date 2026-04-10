@@ -1,12 +1,10 @@
 // src/Ble.cpp — BLE module with Nordic UART Service (NUS).
 //
-// Implements the exact BLE naming and pairing protocol that Sideband
-// and Reticulum's RNodeInterface expect:
-//   - Device name: "RNode XXXX" where XXXX = last 2 bytes of
-//     MD5(ble_mac_6bytes + eeprom_signature_byte)
-//   - MITM-protected pairing with random 6-digit PIN
-//   - SECMODE_ENC_WITH_MITM on the UART service
-//   - NUS (Nordic UART Service) for KISS transport
+// Matches the official RNode firmware's BLE implementation:
+//   - Device name: "RNode XXXX" (MD5 of MAC + EEPROM signature byte)
+//   - BLEUart with 6144-byte RX FIFO, buffered TXD, frame-level flush
+//   - Bandwidth MAX, 515-byte MTU, Data Length Extension
+//   - Just Works bonding (phone shows confirmation, tap accept)
 
 #include "Ble.h"
 
@@ -19,7 +17,6 @@
 namespace rlr { namespace ble {
 
 // ---- Minimal MD5 (RFC 1321) for BLE name hash -----------------------
-// Only used to compute the 16-byte hash for the "RNode XXXX" suffix.
 
 namespace {
 
@@ -53,11 +50,8 @@ static inline uint32_t _rotl(uint32_t x, uint32_t n) {
     return (x << n) | (x >> (32 - n));
 }
 
-// Compute MD5 of data[0..len-1], result in out[0..15]
 static void md5_hash(const uint8_t* data, size_t len, uint8_t out[16]) {
     uint32_t a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
-
-    // Pre-processing: pad to 64-byte blocks
     size_t padded_len = ((len + 8) / 64 + 1) * 64;
     uint8_t* msg = (uint8_t*)calloc(padded_len, 1);
     memcpy(msg, data, len);
@@ -68,32 +62,18 @@ static void md5_hash(const uint8_t* data, size_t len, uint8_t out[16]) {
     for (size_t offset = 0; offset < padded_len; offset += 64) {
         uint32_t* M = (uint32_t*)(msg + offset);
         uint32_t A = a0, B = b0, C = c0, D = d0;
-
         for (uint32_t i = 0; i < 64; i++) {
             uint32_t F, g;
-            if (i < 16) {
-                F = (B & C) | (~B & D);
-                g = i;
-            } else if (i < 32) {
-                F = (D & B) | (~D & C);
-                g = (5 * i + 1) % 16;
-            } else if (i < 48) {
-                F = B ^ C ^ D;
-                g = (3 * i + 5) % 16;
-            } else {
-                F = C ^ (B | ~D);
-                g = (7 * i) % 16;
-            }
+            if (i < 16)      { F = (B & C) | (~B & D); g = i; }
+            else if (i < 32) { F = (D & B) | (~D & C); g = (5*i+1) % 16; }
+            else if (i < 48) { F = B ^ C ^ D;          g = (3*i+5) % 16; }
+            else              { F = C ^ (B | ~D);       g = (7*i) % 16; }
             F = F + A + md5_k[i] + M[g];
-            A = D;
-            D = C;
-            C = B;
-            B = B + _rotl(F, md5_s[i]);
+            A = D; D = C; C = B; B = B + _rotl(F, md5_s[i]);
         }
         a0 += A; b0 += B; c0 += C; d0 += D;
     }
     free(msg);
-
     memcpy(out +  0, &a0, 4);
     memcpy(out +  4, &b0, 4);
     memcpy(out +  8, &c0, 4);
@@ -104,20 +84,24 @@ static void md5_hash(const uint8_t* data, size_t len, uint8_t out[16]) {
 
 // ---- BLE state ------------------------------------------------------
 
-static BLEUart s_ble_uart;
+static constexpr uint16_t BLE_RX_BUF = 6144;
+static BLEUart s_ble_uart(BLE_RX_BUF);
 static BLEDis  s_ble_dis;
+static BLEBas  s_ble_bas;
 static bool    s_connected = false;
-static char    s_devname[12];    // "RNode XXXX\0"
+static char    s_devname[12];  // "RNode XXXX\0"
 
 // ---- Callbacks ------------------------------------------------------
 
 static void _connect_callback(uint16_t conn_handle) {
     BLEConnection* conn = Bluefruit.Connection(conn_handle);
     if (conn) {
-        conn->requestPHY();
-        conn->requestMtuExchange(247);
+        conn->requestPHY(BLE_GAP_PHY_2MBPS);
+        conn->requestMtuExchange(515);
+        conn->requestDataLengthUpdate();
     }
-    Serial.println("BLE: central connected, waiting for pairing...");
+    s_connected = true;
+    Serial.println("BLE: central connected");
 }
 
 static void _disconnect_callback(uint16_t conn_handle, uint8_t reason) {
@@ -127,23 +111,17 @@ static void _disconnect_callback(uint16_t conn_handle, uint8_t reason) {
     Serial.println(reason, HEX);
 }
 
-static void _secured_callback(uint16_t conn_handle) {
-    (void)conn_handle;
-    s_connected = true;
-    Serial.println("BLE: paired and bonded");
-}
-
 // ---- Public API -----------------------------------------------------
 
 void init(const char* device_name) {
-    (void)device_name;  // We compute our own "RNode XXXX" name
+    (void)device_name;
     Serial.println("BLE: initializing...");
 
+    Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
     Bluefruit.begin();
-    Bluefruit.setTxPower(4);
+    Bluefruit.setTxPower(8);
 
-    // Compute "RNode XXXX" name from BLE MAC + EEPROM signature byte
-    // This matches the official RNode firmware's naming convention
+    // Compute "RNode XXXX" name
     const ble_gap_addr_t gap_addr = Bluefruit.getAddr();
     uint8_t hash_input[7];
     memcpy(hash_input, gap_addr.addr, 6);
@@ -152,7 +130,6 @@ void init(const char* device_name) {
     uint8_t md5[16];
     md5_hash(hash_input, 7, md5);
     sprintf(s_devname, "RNode %02X%02X", md5[14], md5[15]);
-
     Bluefruit.setName(s_devname);
 
     // Connection callbacks
@@ -160,21 +137,21 @@ void init(const char* device_name) {
     Bluefruit.Periph.setDisconnectCallback(_disconnect_callback);
     Bluefruit.Periph.setConnInterval(6, 12);  // 7.5 - 15 ms
 
-    // Security: "Just Works" bonding — phone shows a confirmation
-    // prompt, user taps accept, no PIN entry needed. This matches
-    // the pairing UX of the official RNode firmware with Sideband.
-    Bluefruit.Security.setIOCaps(false, false, false);  // no IO = Just Works
+    // Security: Just Works bonding
+    Bluefruit.Security.setIOCaps(false, false, false);
     Bluefruit.Security.setMITM(false);
-    Bluefruit.Security.setSecuredCallback(_secured_callback);
 
     // Device Information Service
     s_ble_dis.setManufacturer(BOARD_MANUFACTURER);
     s_ble_dis.setModel(BOARD_NAME);
     s_ble_dis.begin();
 
-    // Nordic UART Service — encrypted but no MITM required (Just Works)
+    // Battery Service
+    s_ble_bas.begin();
+
+    // Nordic UART Service — buffered TXD for frame-level flushing
+    s_ble_uart.bufferTXD(true);
     s_ble_uart.begin();
-    s_ble_uart.setPermission(SECMODE_ENC_NO_MITM, SECMODE_ENC_NO_MITM);
 
     // Advertising: NUS UUID in adv packet, name in scan response
     Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
@@ -182,7 +159,6 @@ void init(const char* device_name) {
     Bluefruit.Advertising.addService(s_ble_uart);
     Bluefruit.ScanResponse.addName();
 
-    // Start advertising
     Bluefruit.Advertising.restartOnDisconnect(true);
     Bluefruit.Advertising.setInterval(32, 244);
     Bluefruit.Advertising.setFastTimeout(30);
@@ -194,7 +170,7 @@ void init(const char* device_name) {
 }
 
 bool connected() {
-    return s_connected && s_ble_uart.notifyEnabled();
+    return s_connected;
 }
 
 int available() {
@@ -206,13 +182,19 @@ int read() {
 }
 
 size_t write(const uint8_t* buf, size_t len) {
-    if (!connected()) return 0;
+    if (!s_connected) return 0;
     return s_ble_uart.write(buf, len);
 }
 
 size_t write(uint8_t b) {
-    if (!connected()) return 0;
+    if (!s_connected) return 0;
     return s_ble_uart.write(b);
+}
+
+void flush() {
+    if (s_connected) {
+        s_ble_uart.flushTXD();
+    }
 }
 
 }} // namespace rlr::ble
@@ -226,6 +208,7 @@ int available() { return 0; }
 int read() { return -1; }
 size_t write(const uint8_t*, size_t) { return 0; }
 size_t write(uint8_t) { return 0; }
+void flush() {}
 }} // namespace rlr::ble
 
 #endif // HAS_BLE

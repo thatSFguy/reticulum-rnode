@@ -29,4 +29,8 @@ int read();
 size_t write(const uint8_t* buf, size_t len);
 size_t write(uint8_t b);
 
+// Flush buffered TXD data as a BLE notification. Call after
+// writing each complete KISS frame (at the closing FEND).
+void flush();
+
 }} // namespace rlr::ble

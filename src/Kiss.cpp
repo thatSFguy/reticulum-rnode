@@ -26,11 +26,6 @@ static size_t  s_frame_len = 0;
 static bool    s_in_frame  = false;
 static bool    s_escape    = false;
 
-// BLE KISS parser state (separate so interleaved bytes don't corrupt)
-static uint8_t s_ble_frame_buf[FRAME_BUF_SIZE];
-static size_t  s_ble_frame_len = 0;
-static bool    s_ble_in_frame  = false;
-static bool    s_ble_escape    = false;
 
 // Current radio config (set by host commands)
 static uint32_t s_freq_hz   = 0;
@@ -101,9 +96,7 @@ static void _write_buf(const uint8_t* buf, size_t len, Transport t) {
 // ---- KISS frame encoder ------------------------------------------
 
 // Build a KISS frame into a buffer and send in one write.
-// BLE requires bulk writes — byte-by-byte sends each byte as a
-// separate BLE notification which is too slow and chokes the link.
-static constexpr size_t KISS_TX_BUF_SIZE = 1100;  // worst case: 512 payload * 2 (all escaped) + 3
+static constexpr size_t KISS_TX_BUF_SIZE = 1100;
 static uint8_t s_kiss_tx_buf[KISS_TX_BUF_SIZE];
 
 static void _send_frame_on(uint8_t cmd, const uint8_t* data, size_t len, Transport t) {
@@ -123,10 +116,21 @@ static void _send_frame_on(uint8_t cmd, const uint8_t* data, size_t len, Transpo
     }
     s_kiss_tx_buf[pos++] = FEND;
     _write_buf(s_kiss_tx_buf, pos, t);
+    // Flush BLE TXD buffer at end of each KISS frame so the
+    // complete frame goes out as one (or few) BLE notifications.
+    if (t == TRANSPORT_BLE) {
+        rlr::ble::flush();
+    }
+}
+
+// Determine the active transport: when BLE is connected, all IO
+// goes exclusively to BLE (matching official RNode firmware behavior).
+static Transport _active_transport() {
+    return rlr::ble::connected() ? TRANSPORT_BLE : TRANSPORT_SERIAL;
 }
 
 void send_frame(uint8_t cmd, const uint8_t* data, size_t len) {
-    _send_frame_on(cmd, data, len, s_last_transport);
+    _send_frame_on(cmd, data, len, _active_transport());
 }
 
 void send_byte(uint8_t cmd, uint8_t value) {
@@ -134,22 +138,14 @@ void send_byte(uint8_t cmd, uint8_t value) {
 }
 
 void send_rx_packet(const uint8_t* data, size_t len, float rssi, float snr) {
-    // RX packets go to both Serial and BLE (if connected)
+    // Send RX packet to the active transport (BLE if connected, else Serial)
+    Transport t = _active_transport();
     uint8_t rssi_byte = (uint8_t)((int)rssi + RSSI_OFFSET);
     int8_t snr_raw = (int8_t)(snr * 4.0f);
 
-    // Always send to Serial
-    _send_frame_on(CMD_STAT_RSSI, &rssi_byte, 1, TRANSPORT_SERIAL);
-    _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, TRANSPORT_SERIAL);
-    _send_frame_on(CMD_DATA, data, len, TRANSPORT_SERIAL);
-
-    // Also send to BLE if connected
-    if (rlr::ble::connected()) {
-        _send_frame_on(CMD_STAT_RSSI, &rssi_byte, 1, TRANSPORT_BLE);
-        _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, TRANSPORT_BLE);
-        _send_frame_on(CMD_DATA, data, len, TRANSPORT_BLE);
-    }
-
+    _send_frame_on(CMD_STAT_RSSI, &rssi_byte, 1, t);
+    _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, t);
+    _send_frame_on(CMD_DATA, data, len, t);
     s_rx_count++;
 }
 
@@ -549,71 +545,70 @@ void init() {
 }
 
 void tick() {
-    // Process Serial bytes
-    while (Serial.available()) {
-        uint8_t c = Serial.read();
+    // Exclusive transport: when BLE is connected, read from BLE only.
+    // When disconnected, read from Serial only. This matches the
+    // official RNode firmware behavior.
+    bool ble_active = rlr::ble::connected();
 
-        if (c == FEND) {
-            if (s_in_frame && s_frame_len > 0) {
-                s_last_transport = TRANSPORT_SERIAL;
-                uint8_t cmd = s_frame_buf[0];
-                dispatch_frame(cmd, s_frame_buf + 1, s_frame_len - 1);
+    if (ble_active) {
+        // Read from BLE
+        while (rlr::ble::available()) {
+            int raw = rlr::ble::read();
+            if (raw < 0) break;
+            uint8_t c = (uint8_t)raw;
+
+            if (c == FEND) {
+                if (s_in_frame && s_frame_len > 0) {
+                    uint8_t cmd = s_frame_buf[0];
+                    dispatch_frame(cmd, s_frame_buf + 1, s_frame_len - 1);
+                    s_frame_len = 0;
+                }
+                s_in_frame = true;
                 s_frame_len = 0;
+                s_escape = false;
+                continue;
             }
-            s_in_frame = true;
-            s_frame_len = 0;
-            s_escape = false;
-            continue;
-        }
-
-        if (!s_in_frame) continue;
-
-        if (s_escape) {
-            s_escape = false;
-            if (c == TFEND) c = FEND;
-            else if (c == TFESC) c = FESC;
-        } else if (c == FESC) {
-            s_escape = true;
-            continue;
-        }
-
-        if (s_frame_len < FRAME_BUF_SIZE) {
-            s_frame_buf[s_frame_len++] = c;
-        }
-    }
-
-    // Process BLE bytes (same KISS parser, separate state)
-    while (rlr::ble::available()) {
-        int raw = rlr::ble::read();
-        if (raw < 0) break;
-        uint8_t c = (uint8_t)raw;
-
-        if (c == FEND) {
-            if (s_ble_in_frame && s_ble_frame_len > 0) {
-                s_last_transport = TRANSPORT_BLE;
-                uint8_t cmd = s_ble_frame_buf[0];
-                dispatch_frame(cmd, s_ble_frame_buf + 1, s_ble_frame_len - 1);
-                s_ble_frame_len = 0;
+            if (!s_in_frame) continue;
+            if (s_escape) {
+                s_escape = false;
+                if (c == TFEND) c = FEND;
+                else if (c == TFESC) c = FESC;
+            } else if (c == FESC) {
+                s_escape = true;
+                continue;
             }
-            s_ble_in_frame = true;
-            s_ble_frame_len = 0;
-            s_ble_escape = false;
-            continue;
+            if (s_frame_len < FRAME_BUF_SIZE) {
+                s_frame_buf[s_frame_len++] = c;
+            }
         }
+    } else {
+        // Read from Serial
+        while (Serial.available()) {
+            uint8_t c = Serial.read();
 
-        if (!s_ble_in_frame) continue;
-
-        if (s_ble_escape) {
-            s_ble_escape = false;
-            if (c == TFEND) c = FEND;
-            else if (c == TFESC) c = FESC;
-        } else if (c == FESC) {
-            s_ble_escape = true;
-            continue;
-        }
-
-        if (s_ble_frame_len < FRAME_BUF_SIZE) {
-            s_ble_frame_buf[s_ble_frame_len++] = c;
+            if (c == FEND) {
+                if (s_in_frame && s_frame_len > 0) {
+                    uint8_t cmd = s_frame_buf[0];
+                    dispatch_frame(cmd, s_frame_buf + 1, s_frame_len - 1);
+                    s_frame_len = 0;
+                }
+                s_in_frame = true;
+                s_frame_len = 0;
+                s_escape = false;
+                continue;
+            }
+            if (!s_in_frame) continue;
+            if (s_escape) {
+                s_escape = false;
+                if (c == TFEND) c = FEND;
+                else if (c == TFESC) c = FESC;
+            } else if (c == FESC) {
+                s_escape = true;
+                continue;
+            }
+            if (s_frame_len < FRAME_BUF_SIZE) {
+                s_frame_buf[s_frame_len++] = c;
+            }
         }
     }
 }

@@ -1,6 +1,5 @@
 {
-  "project": "reticulum-rnode",
-  "generated": "2026-04-09T00:00:00Z",
+  "generated_at": "2026-04-10T01:35:01+00:00",
   "releases": [
     {
       "tag": "v0.2.0",
@@ -8,33 +7,38 @@
       "boards": [
         {
           "name": "Faketec",
-          "zip_path": "firmware/v0.2.0/firmware-Faketec.zip",
-          "zip_size": 235247,
-          "uf2_path": "firmware/v0.2.0/firmware-Faketec.uf2"
-        },
-        {
-          "name": "RAK4631",
-          "zip_path": "firmware/v0.2.0/firmware-RAK4631.zip",
-          "zip_size": 234928,
-          "uf2_path": "firmware/v0.2.0/firmware-RAK4631.uf2"
-        },
-        {
-          "name": "XIAO_nRF52840",
-          "zip_path": "firmware/v0.2.0/firmware-XIAO_nRF52840.zip",
-          "zip_size": 235184,
-          "uf2_path": "firmware/v0.2.0/firmware-XIAO_nRF52840.uf2"
+          "uf2_path": "firmware/v0.2.0/reticulum-rnode-Faketec-v0.2.0.uf2",
+          "uf2_size": 468992,
+          "zip_path": "firmware/v0.2.0/reticulum-rnode-Faketec-v0.2.0.zip",
+          "zip_size": 235247
         },
         {
           "name": "Heltec_T114",
-          "zip_path": "firmware/v0.2.0/firmware-Heltec_T114.zip",
-          "zip_size": 234928,
-          "uf2_path": "firmware/v0.2.0/firmware-Heltec_T114.uf2"
+          "uf2_path": "firmware/v0.2.0/reticulum-rnode-Heltec_T114-v0.2.0.uf2",
+          "uf2_size": 468480,
+          "zip_path": "firmware/v0.2.0/reticulum-rnode-Heltec_T114-v0.2.0.zip",
+          "zip_size": 234928
         },
         {
           "name": "RAK3401",
-          "zip_path": "firmware/v0.2.0/firmware-RAK3401.zip",
-          "zip_size": 234944,
-          "uf2_path": "firmware/v0.2.0/firmware-RAK3401.uf2"
+          "uf2_path": "firmware/v0.2.0/reticulum-rnode-RAK3401-v0.2.0.uf2",
+          "uf2_size": 468480,
+          "zip_path": "firmware/v0.2.0/reticulum-rnode-RAK3401-v0.2.0.zip",
+          "zip_size": 234944
+        },
+        {
+          "name": "RAK4631",
+          "uf2_path": "firmware/v0.2.0/reticulum-rnode-RAK4631-v0.2.0.uf2",
+          "uf2_size": 468480,
+          "zip_path": "firmware/v0.2.0/reticulum-rnode-RAK4631-v0.2.0.zip",
+          "zip_size": 234928
+        },
+        {
+          "name": "XIAO_nRF52840",
+          "uf2_path": "firmware/v0.2.0/reticulum-rnode-XIAO_nRF52840-v0.2.0.uf2",
+          "uf2_size": 468992,
+          "zip_path": "firmware/v0.2.0/reticulum-rnode-XIAO_nRF52840-v0.2.0.zip",
+          "zip_size": 235184
         }
       ]
     },
@@ -44,33 +48,38 @@
       "boards": [
         {
           "name": "Faketec",
-          "zip_path": "firmware/v0.1.0/firmware-Faketec.zip",
-          "zip_size": 183528,
-          "uf2_path": "firmware/v0.1.0/firmware-Faketec.uf2"
-        },
-        {
-          "name": "RAK4631",
-          "zip_path": "firmware/v0.1.0/firmware-RAK4631.zip",
-          "zip_size": 183288,
-          "uf2_path": "firmware/v0.1.0/firmware-RAK4631.uf2"
-        },
-        {
-          "name": "XIAO_nRF52840",
-          "zip_path": "firmware/v0.1.0/firmware-XIAO_nRF52840.zip",
-          "zip_size": 183496,
-          "uf2_path": "firmware/v0.1.0/firmware-XIAO_nRF52840.uf2"
+          "uf2_path": "firmware/v0.1.0/reticulum-rnode-Faketec-v0.1.0.uf2",
+          "uf2_size": 365568,
+          "zip_path": "firmware/v0.1.0/reticulum-rnode-Faketec-v0.1.0.zip",
+          "zip_size": 183528
         },
         {
           "name": "Heltec_T114",
-          "zip_path": "firmware/v0.1.0/firmware-Heltec_T114.zip",
-          "zip_size": 183304,
-          "uf2_path": "firmware/v0.1.0/firmware-Heltec_T114.uf2"
+          "uf2_path": "firmware/v0.1.0/reticulum-rnode-Heltec_T114-v0.1.0.uf2",
+          "uf2_size": 365056,
+          "zip_path": "firmware/v0.1.0/reticulum-rnode-Heltec_T114-v0.1.0.zip",
+          "zip_size": 183304
         },
         {
           "name": "RAK3401",
-          "zip_path": "firmware/v0.1.0/firmware-RAK3401.zip",
-          "zip_size": 183304,
-          "uf2_path": "firmware/v0.1.0/firmware-RAK3401.uf2"
+          "uf2_path": "firmware/v0.1.0/reticulum-rnode-RAK3401-v0.1.0.uf2",
+          "uf2_size": 365056,
+          "zip_path": "firmware/v0.1.0/reticulum-rnode-RAK3401-v0.1.0.zip",
+          "zip_size": 183304
+        },
+        {
+          "name": "RAK4631",
+          "uf2_path": "firmware/v0.1.0/reticulum-rnode-RAK4631-v0.1.0.uf2",
+          "uf2_size": 365056,
+          "zip_path": "firmware/v0.1.0/reticulum-rnode-RAK4631-v0.1.0.zip",
+          "zip_size": 183288
+        },
+        {
+          "name": "XIAO_nRF52840",
+          "uf2_path": "firmware/v0.1.0/reticulum-rnode-XIAO_nRF52840-v0.1.0.uf2",
+          "uf2_size": 365568,
+          "zip_path": "firmware/v0.1.0/reticulum-rnode-XIAO_nRF52840-v0.1.0.zip",
+          "zip_size": 183496
         }
       ]
     }

@@ -100,22 +100,29 @@ static void _write_buf(const uint8_t* buf, size_t len, Transport t) {
 
 // ---- KISS frame encoder ------------------------------------------
 
-// Send a frame on a specific transport
+// Build a KISS frame into a buffer and send in one write.
+// BLE requires bulk writes — byte-by-byte sends each byte as a
+// separate BLE notification which is too slow and chokes the link.
+static constexpr size_t KISS_TX_BUF_SIZE = 1100;  // worst case: 512 payload * 2 (all escaped) + 3
+static uint8_t s_kiss_tx_buf[KISS_TX_BUF_SIZE];
+
 static void _send_frame_on(uint8_t cmd, const uint8_t* data, size_t len, Transport t) {
-    _write_byte(FEND, t);
-    _write_byte(cmd, t);
-    for (size_t i = 0; i < len; i++) {
+    size_t pos = 0;
+    s_kiss_tx_buf[pos++] = FEND;
+    s_kiss_tx_buf[pos++] = cmd;
+    for (size_t i = 0; i < len && pos < KISS_TX_BUF_SIZE - 2; i++) {
         if (data[i] == FEND) {
-            _write_byte(FESC, t);
-            _write_byte(TFEND, t);
+            s_kiss_tx_buf[pos++] = FESC;
+            s_kiss_tx_buf[pos++] = TFEND;
         } else if (data[i] == FESC) {
-            _write_byte(FESC, t);
-            _write_byte(TFESC, t);
+            s_kiss_tx_buf[pos++] = FESC;
+            s_kiss_tx_buf[pos++] = TFESC;
         } else {
-            _write_byte(data[i], t);
+            s_kiss_tx_buf[pos++] = data[i];
         }
     }
-    _write_byte(FEND, t);
+    s_kiss_tx_buf[pos++] = FEND;
+    _write_buf(s_kiss_tx_buf, pos, t);
 }
 
 void send_frame(uint8_t cmd, const uint8_t* data, size_t len) {
@@ -126,25 +133,20 @@ void send_byte(uint8_t cmd, uint8_t value) {
     send_frame(cmd, &value, 1);
 }
 
-// Helper: send a single-byte frame on a specific transport
-static void _send_byte_on(uint8_t cmd, uint8_t value, Transport t) {
-    _send_frame_on(cmd, &value, 1, t);
-}
-
 void send_rx_packet(const uint8_t* data, size_t len, float rssi, float snr) {
     // RX packets go to both Serial and BLE (if connected)
     uint8_t rssi_byte = (uint8_t)((int)rssi + RSSI_OFFSET);
     int8_t snr_raw = (int8_t)(snr * 4.0f);
 
     // Always send to Serial
-    _send_byte_on(CMD_STAT_RSSI, rssi_byte, TRANSPORT_SERIAL);
-    _send_byte_on(CMD_STAT_SNR, (uint8_t)snr_raw, TRANSPORT_SERIAL);
+    _send_frame_on(CMD_STAT_RSSI, &rssi_byte, 1, TRANSPORT_SERIAL);
+    _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, TRANSPORT_SERIAL);
     _send_frame_on(CMD_DATA, data, len, TRANSPORT_SERIAL);
 
     // Also send to BLE if connected
     if (rlr::ble::connected()) {
-        _send_byte_on(CMD_STAT_RSSI, rssi_byte, TRANSPORT_BLE);
-        _send_byte_on(CMD_STAT_SNR, (uint8_t)snr_raw, TRANSPORT_BLE);
+        _send_frame_on(CMD_STAT_RSSI, &rssi_byte, 1, TRANSPORT_BLE);
+        _send_frame_on(CMD_STAT_SNR, (uint8_t*)&snr_raw, 1, TRANSPORT_BLE);
         _send_frame_on(CMD_DATA, data, len, TRANSPORT_BLE);
     }
 

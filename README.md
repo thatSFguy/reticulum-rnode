@@ -67,22 +67,21 @@ rnodeconf /dev/ttyACM0 --autoinstall
 
 ## Webflasher
 
-A browser-based flasher and provisioning tool is included in `webflasher/`. It uses the Web Serial API (Chrome/Edge/Opera) to:
+A browser-based flasher and provisioning tool is included in `docs/`. It uses the Web Serial API (Chrome/Edge/Opera) to:
 
 - Flash firmware via nRF52 DFU (1200-baud touch reset)
 - Provision device identity (product, model, serial, checksum) to EEPROM
 - Configure radio parameters (frequency, bandwidth, SF, CR, TX power)
 - Read device info, blink LED, dump EEPROM
 
-To use it, serve the `webflasher/` directory with any static HTTP server, or open `index.html` directly. No build step required.
+To use it locally, serve the `docs/` directory with any static HTTP server. No build step required.
 
 ```bash
-# Quick local server
-cd webflasher && python -m http.server 8080
+cd docs && python -m http.server 8080
 # Then open http://localhost:8080
 ```
 
-Or deploy to GitHub Pages for zero-install access.
+It's also deployed via GitHub Pages at the repo's Pages URL (Settings > Pages > Source: `/docs` from `master`).
 
 ## Features
 

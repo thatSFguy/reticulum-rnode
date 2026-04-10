@@ -1,6 +1,57 @@
 {
-  "generated_at": "2026-04-10T02:30:28+00:00",
+  "generated_at": "2026-04-10T02:51:11+00:00",
   "releases": [
+    {
+      "tag": "v0.3.3",
+      "prerelease": false,
+      "boards": [
+        {
+          "name": "Faketec",
+          "hex_path": "firmware/v0.3.3/reticulum-rnode-Faketec-v0.3.3.hex",
+          "hex_size": 664720,
+          "uf2_path": "firmware/v0.3.3/reticulum-rnode-Faketec-v0.3.3.uf2",
+          "uf2_size": 473088,
+          "zip_path": "firmware/v0.3.3/reticulum-rnode-Faketec-v0.3.3.zip",
+          "zip_size": 237107
+        },
+        {
+          "name": "Heltec_T114",
+          "hex_path": "firmware/v0.3.3/reticulum-rnode-Heltec_T114-v0.3.3.hex",
+          "hex_size": 664045,
+          "uf2_path": "firmware/v0.3.3/reticulum-rnode-Heltec_T114-v0.3.3.uf2",
+          "uf2_size": 472576,
+          "zip_path": "firmware/v0.3.3/reticulum-rnode-Heltec_T114-v0.3.3.zip",
+          "zip_size": 236867
+        },
+        {
+          "name": "RAK3401",
+          "hex_path": "firmware/v0.3.3/reticulum-rnode-RAK3401-v0.3.3.hex",
+          "hex_size": 664045,
+          "uf2_path": "firmware/v0.3.3/reticulum-rnode-RAK3401-v0.3.3.uf2",
+          "uf2_size": 472576,
+          "zip_path": "firmware/v0.3.3/reticulum-rnode-RAK3401-v0.3.3.zip",
+          "zip_size": 236867
+        },
+        {
+          "name": "RAK4631",
+          "hex_path": "firmware/v0.3.3/reticulum-rnode-RAK4631-v0.3.3.hex",
+          "hex_size": 664045,
+          "uf2_path": "firmware/v0.3.3/reticulum-rnode-RAK4631-v0.3.3.uf2",
+          "uf2_size": 472576,
+          "zip_path": "firmware/v0.3.3/reticulum-rnode-RAK4631-v0.3.3.zip",
+          "zip_size": 236867
+        },
+        {
+          "name": "XIAO_nRF52840",
+          "hex_path": "firmware/v0.3.3/reticulum-rnode-XIAO_nRF52840-v0.3.3.hex",
+          "hex_size": 664557,
+          "uf2_path": "firmware/v0.3.3/reticulum-rnode-XIAO_nRF52840-v0.3.3.uf2",
+          "uf2_size": 472576,
+          "zip_path": "firmware/v0.3.3/reticulum-rnode-XIAO_nRF52840-v0.3.3.zip",
+          "zip_size": 237043
+        }
+      ]
+    },
     {
       "tag": "v0.3.2",
       "prerelease": false,

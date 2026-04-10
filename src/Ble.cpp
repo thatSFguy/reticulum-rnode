@@ -108,7 +108,6 @@ static BLEUart s_ble_uart;
 static BLEDis  s_ble_dis;
 static bool    s_connected = false;
 static char    s_devname[12];    // "RNode XXXX\0"
-static uint32_t s_pairing_pin = 0;
 
 // ---- Callbacks ------------------------------------------------------
 
@@ -128,33 +127,10 @@ static void _disconnect_callback(uint16_t conn_handle, uint8_t reason) {
     Serial.println(reason, HEX);
 }
 
-static bool _passkey_callback(uint16_t conn_handle, uint8_t const passkey[6], bool match_request) {
-    (void)conn_handle;
-    (void)match_request;
-    Serial.print("BLE: pairing PIN: ");
-    Serial.println(s_pairing_pin);
-    return true;
-}
-
 static void _secured_callback(uint16_t conn_handle) {
-    BLEConnection* conn = Bluefruit.Connection(conn_handle);
-    if (!conn) return;
-
-    ble_gap_conn_sec_t security;
-    sd_ble_gap_conn_sec_get(conn_handle, &security);
-
-    if (security.sec_mode.sm == 1 && security.sec_mode.lv >= 3) {
-        s_connected = true;
-        Serial.println("BLE: paired and secured (MITM)");
-    } else {
-        Serial.print("BLE: security level too low (sm=");
-        Serial.print(security.sec_mode.sm);
-        Serial.print(" lv=");
-        Serial.print(security.sec_mode.lv);
-        Serial.println(") — disconnecting");
-        conn->removeBondKey();
-        conn->disconnect();
-    }
+    (void)conn_handle;
+    s_connected = true;
+    Serial.println("BLE: paired and bonded");
 }
 
 // ---- Public API -----------------------------------------------------
@@ -184,25 +160,21 @@ void init(const char* device_name) {
     Bluefruit.Periph.setDisconnectCallback(_disconnect_callback);
     Bluefruit.Periph.setConnInterval(6, 12);  // 7.5 - 15 ms
 
-    // Security: MITM pairing with random 6-digit PIN
-    s_pairing_pin = random(100000, 999999);
-    char pin_str[7];
-    sprintf(pin_str, "%06lu", (unsigned long)s_pairing_pin);
-
-    Bluefruit.Security.setIOCaps(true, false, false);  // display only
-    Bluefruit.Security.setMITM(true);
-    Bluefruit.Security.setPairPasskeyCallback(_passkey_callback);
+    // Security: "Just Works" bonding — phone shows a confirmation
+    // prompt, user taps accept, no PIN entry needed. This matches
+    // the pairing UX of the official RNode firmware with Sideband.
+    Bluefruit.Security.setIOCaps(false, false, false);  // no IO = Just Works
+    Bluefruit.Security.setMITM(false);
     Bluefruit.Security.setSecuredCallback(_secured_callback);
-    Bluefruit.Security.setPIN(pin_str);
 
     // Device Information Service
     s_ble_dis.setManufacturer(BOARD_MANUFACTURER);
     s_ble_dis.setModel(BOARD_NAME);
     s_ble_dis.begin();
 
-    // Nordic UART Service with MITM encryption required
+    // Nordic UART Service — encrypted but no MITM required (Just Works)
     s_ble_uart.begin();
-    s_ble_uart.setPermission(SECMODE_ENC_WITH_MITM, SECMODE_ENC_WITH_MITM);
+    s_ble_uart.setPermission(SECMODE_ENC_NO_MITM, SECMODE_ENC_NO_MITM);
 
     // Advertising: NUS UUID in adv packet, name in scan response
     Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
@@ -218,8 +190,7 @@ void init(const char* device_name) {
 
     Serial.print("BLE: advertising as '");
     Serial.print(s_devname);
-    Serial.print("', pairing PIN: ");
-    Serial.println(s_pairing_pin);
+    Serial.println("'");
 }
 
 bool connected() {

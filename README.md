@@ -57,6 +57,35 @@ The build produces `firmware.hex`, `firmware.zip` (nrfutil DFU package), and `fi
 
 4. Start `rnsd` or your Reticulum application. The host will auto-detect the RNode and configure it via KISS commands.
 
+## Bluetooth (BLE) Pairing
+
+The firmware advertises itself over BLE as `RNode XXXX` (the suffix is
+derived from the device's MAC address). When pairing from a phone, Android
+(and iOS) will show a **PIN entry prompt** — the default PIN is:
+
+```
+123456
+```
+
+After successful pairing the device shows up in your phone's paired
+devices list, and apps like Sideband can connect without further prompts.
+
+### Changing the PIN
+
+The PIN is stored in the device's EEPROM. To change it, connect via USB
+and use the webflasher's **"Bluetooth Pairing PIN"** panel: read the
+current PIN, type a new 6-digit PIN, and click **Write PIN**. You'll need
+to reboot the device for the change to take effect, and re-pair from
+your phone (remove the old pairing first in Android's Bluetooth settings).
+
+It can also be changed programmatically via the KISS command `CMD_BLE_PIN`
+(0x70): send a 1-byte payload `0x00` to read the current PIN, or 6 ASCII
+digits to store a new one.
+
+**Security note:** The default PIN is weak and identical across every
+flashed device. If you're using BLE in an environment where pairing
+hijack is a concern, change it to something unique before pairing.
+
 ## Provisioning with rnodeconf
 
 The firmware supports EEPROM emulation for `rnodeconf` provisioning. The virtual EEPROM is backed by LittleFS on the nRF52840's internal flash.
@@ -90,6 +119,7 @@ It's also deployed via GitHub Pages at the repo's Pages URL (Settings > Pages > 
 - CSMA/CA with carrier-sense before transmit
 - Radio config persistence (CMD_CONF_SAVE/DELETE)
 - Battery voltage reporting (CMD_STAT_BAT)
+- BLE transport with configurable pairing PIN (default `123456`, change via webflasher or CMD_BLE_PIN)
 - EEPROM emulation on LittleFS (ROM_READ/ROM_WRITE for rnodeconf)
 - RSSI/SNR reporting on every received packet
 - TX flow control (CMD_READY)

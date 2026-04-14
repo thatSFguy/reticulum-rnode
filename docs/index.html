@@ -217,6 +217,23 @@
   </div>
 </div>
 
+<!-- BLE config panel -->
+<div id="ble-panel" class="panel hidden">
+  <h2>Bluetooth Pairing PIN</h2>
+  <p style="margin-top: 0;">
+    <small>The PIN Android will prompt you for when pairing. Default is
+    <code>123456</code>. Takes effect after the device reboots.</small>
+  </p>
+  <div class="row">
+    <div class="field narrow"><label>PIN (6 digits)</label>
+      <input id="cfg-ble-pin" type="text" maxlength="6" pattern="\d{6}" value="123456"></div>
+  </div>
+  <div class="actions">
+    <button id="btn-read-ble-pin" class="secondary">Read PIN</button>
+    <button id="btn-write-ble-pin">Write PIN</button>
+  </div>
+</div>
+
 <!-- Log panel -->
 <div class="panel">
   <h2>Log</h2>
@@ -484,6 +501,7 @@ $('btn-connect').addEventListener('click', async () => {
     $('device-panel').classList.remove('hidden');
     $('provision-panel').classList.remove('hidden');
     $('radio-panel').classList.remove('hidden');
+    $('ble-panel').classList.remove('hidden');
     log('ok', `${boardInfo.name}, FW ${fw ? fw.major+'.'+fw.minor : '?'}, Bat ${battery}%`);
   } catch (e) { log('err', 'Connect failed: ' + e.message); }
 });
@@ -497,6 +515,7 @@ $('btn-disconnect').addEventListener('click', async () => {
   $('device-panel').classList.add('hidden');
   $('provision-panel').classList.add('hidden');
   $('radio-panel').classList.add('hidden');
+  $('ble-panel').classList.add('hidden');
   log('info', 'Disconnected');
 });
 
@@ -581,6 +600,23 @@ $('btn-save-config').addEventListener('click', async () => {
 
 $('btn-delete-config').addEventListener('click', async () => {
   try { await rnode.deleteConfig(); log('ok', 'Saved config deleted'); } catch (e) { log('err', e.message); }
+});
+
+$('btn-read-ble-pin').addEventListener('click', async () => {
+  try {
+    const pin = await rnode.getBlePin();
+    if (pin) { $('cfg-ble-pin').value = pin; log('ok', 'PIN read: ' + pin); }
+    else log('err', 'Read PIN failed');
+  } catch (e) { log('err', e.message); }
+});
+
+$('btn-write-ble-pin').addEventListener('click', async () => {
+  const pin = $('cfg-ble-pin').value.trim();
+  if (!/^\d{6}$/.test(pin)) { log('err', 'PIN must be exactly 6 digits'); return; }
+  try {
+    const stored = await rnode.setBlePin(pin);
+    log('ok', 'PIN stored: ' + stored + ' (reboot device to apply)');
+  } catch (e) { log('err', e.message); }
 });
 </script>
 </body>

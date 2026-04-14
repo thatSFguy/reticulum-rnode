@@ -60,8 +60,13 @@ constexpr uint8_t CMD_UNLOCK_ROM  = 0x59;
 constexpr uint8_t CMD_HASHES      = 0x60;
 constexpr uint8_t CMD_FW_UPD      = 0x61;
 constexpr uint8_t CMD_CFG_READ    = 0x6D;
+constexpr uint8_t CMD_BLE_PIN     = 0x70;  // Read/write BLE pairing PIN
 
 constexpr uint8_t CMD_ERROR       = 0x90;
+
+// EEPROM layout additions (beyond the standard RNode map)
+constexpr uint16_t ADDR_BLE_PIN   = 0xC0;  // 6 ASCII digits, 0xFF = unset
+constexpr size_t   BLE_PIN_LEN    = 6;
 
 // Detect handshake
 constexpr uint8_t DETECT_REQ  = 0x73;

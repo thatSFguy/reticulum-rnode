@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 #include "Eeprom.h"
+#include "Kiss.h"  // ADDR_BLE_PIN, BLE_PIN_LEN
 
 namespace rlr { namespace ble {
 
@@ -162,10 +163,23 @@ void init(const char* device_name) {
     Bluefruit.Periph.setDisconnectCallback(_disconnect_callback);
     Bluefruit.Periph.setConnInterval(6, 12);  // 7.5 - 15 ms
 
-    // Security: Just Works bonding
-    Bluefruit.Security.setIOCaps(false, false, false);
-    Bluefruit.Security.setMITM(false);
+    // Security: PIN-based pairing (MITM via DisplayOnly IO caps).
+    // PIN is stored at EEPROM[ADDR_BLE_PIN]; defaults to "123456" if
+    // unset (all 0xFF). The user can change it via CMD_BLE_PIN over
+    // KISS or via the webflasher; takes effect on next reboot.
+    char ble_pin[rlr::kiss::BLE_PIN_LEN + 1];
+    rlr::eeprom::read(rlr::kiss::ADDR_BLE_PIN, (uint8_t*)ble_pin, rlr::kiss::BLE_PIN_LEN);
+    bool pin_valid = true;
+    for (size_t i = 0; i < rlr::kiss::BLE_PIN_LEN; i++) {
+        if (ble_pin[i] < '0' || ble_pin[i] > '9') { pin_valid = false; break; }
+    }
+    if (!pin_valid) {
+        memcpy(ble_pin, "123456", rlr::kiss::BLE_PIN_LEN);
+    }
+    ble_pin[rlr::kiss::BLE_PIN_LEN] = '\0';
+    Bluefruit.Security.setPIN(ble_pin);
     Bluefruit.Security.setSecuredCallback(_secured_callback);
+    Serial.print("BLE: pairing PIN = "); Serial.println(ble_pin);
 
     // Device Information Service
     s_ble_dis.setManufacturer(BOARD_MANUFACTURER);

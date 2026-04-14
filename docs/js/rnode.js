@@ -47,6 +47,7 @@ const CMD_UNLOCK_ROM  = 0x59;
 const CMD_HASHES      = 0x60;
 const CMD_FW_UPD      = 0x61;
 const CMD_CFG_READ    = 0x6D;
+const CMD_BLE_PIN     = 0x70;
 const CMD_ERROR       = 0x90;
 
 // Detect handshake
@@ -334,6 +335,22 @@ class RNode {
     async getTxPower() {
         const resp = await this._sendAndWait(CMD_TXPOWER, new Uint8Array([0xFF]));
         return resp.length >= 1 ? resp[0] : null;
+    }
+
+    // Read the current BLE pairing PIN (returns 6-char ASCII string).
+    async getBlePin() {
+        const resp = await this._sendAndWait(CMD_BLE_PIN, new Uint8Array([0x00]));
+        if (resp.length !== 6) return null;
+        return new TextDecoder().decode(resp);
+    }
+
+    // Store a new BLE pairing PIN (6 ASCII digits). Takes effect after reboot.
+    async setBlePin(pin) {
+        if (!/^\d{6}$/.test(pin)) throw new Error("PIN must be exactly 6 digits");
+        const bytes = new TextEncoder().encode(pin);
+        const resp = await this._sendAndWait(CMD_BLE_PIN, bytes);
+        if (resp.length !== 6) return null;
+        return new TextDecoder().decode(resp);
     }
 
     async setSpreadingFactor(sf) {

@@ -510,6 +510,33 @@ static void dispatch_frame(uint8_t cmd, const uint8_t* data, size_t len) {
         }
         break;
 
+    case CMD_BLE_PIN:
+        // Read/write the BLE pairing PIN stored in EEPROM.
+        // Query: 1 byte payload = 0x00 → returns current PIN (6 ASCII digits).
+        // Write: 6 bytes ASCII digits → stores new PIN (takes effect after reboot).
+        if (len == 1 && data[0] == 0x00) {
+            uint8_t pin_buf[BLE_PIN_LEN];
+            rlr::eeprom::read(ADDR_BLE_PIN, pin_buf, BLE_PIN_LEN);
+            bool pin_valid = true;
+            for (size_t i = 0; i < BLE_PIN_LEN; i++) {
+                if (pin_buf[i] < '0' || pin_buf[i] > '9') { pin_valid = false; break; }
+            }
+            if (!pin_valid) memcpy(pin_buf, "123456", BLE_PIN_LEN);
+            send_frame(CMD_BLE_PIN, pin_buf, BLE_PIN_LEN);
+        } else if (len == BLE_PIN_LEN) {
+            bool all_digits = true;
+            for (size_t i = 0; i < BLE_PIN_LEN; i++) {
+                if (data[i] < '0' || data[i] > '9') { all_digits = false; break; }
+            }
+            if (all_digits) {
+                rlr::eeprom::write(ADDR_BLE_PIN, data, BLE_PIN_LEN);
+                send_frame(CMD_BLE_PIN, data, BLE_PIN_LEN);  // ack with stored value
+            } else {
+                send_byte(CMD_ERROR, ERROR_EEPROM_LOCK);  // reuse: invalid payload
+            }
+        }
+        break;
+
     case CMD_LEAVE:
         // Host disconnecting — nothing to do
         break;

@@ -189,7 +189,13 @@ void init(const char* device_name) {
     // Battery Service
     s_ble_bas.begin();
 
-    // Nordic UART Service — buffered TXD for frame-level flushing
+    // Nordic UART Service — buffered TXD for frame-level flushing.
+    // REQUIRE MITM-authenticated encryption on the NUS read/write/notify
+    // permissions so the central MUST pair with the PIN set above before
+    // it can use the service. Without this, setPIN() alone doesn't force
+    // a PIN prompt — Android will happily "Just Works" pair silently
+    // because NUS chars default to no security requirement.
+    s_ble_uart.setPermission(SECMODE_ENC_WITH_MITM, SECMODE_ENC_WITH_MITM);
     s_ble_uart.bufferTXD(true);
     s_ble_uart.setNotifyCallback(_notify_callback);
     s_ble_uart.begin();

@@ -1,5 +1,11 @@
-> [!NOTE]
-> **🙋 Seeking a co-maintainer / partner.** I'm stepping back from active development of this repo and looking for someone to help maintain this project (or take it over). Bug reports with a clear repro are welcome; feature requests are PR-welcome but not promised. Interested in partnering?**.
+> [!CAUTION]
+> **Do not use this firmware.** It has an unresolved, fundamental defect: on
+> nRF52 boards the BLE connection drops repeatedly ("Link Status" flapping up
+> and down) whenever the LoRa radio is active — a BLE↔radio coexistence
+> problem that makes it unusable with BLE clients such as Sideband. The same
+> hardware works correctly with other firmware (e.g. Meshtastic, the official
+> RNode firmware), so the fault is in this codebase, not the boards. This
+> repository is **archived and unmaintained**; it should not be relied upon.
 
 # reticulum-rnode
 

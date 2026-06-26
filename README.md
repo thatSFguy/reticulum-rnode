@@ -4,24 +4,22 @@ RNode firmware with KISS serial interface for nRF52840 + SX1262 boards. Acts as 
 
 The host runs the Reticulum stack (via `rnsd`, Sideband, or NomadNet); this firmware handles the radio.
 
-> ## ⚠️ Not recommended for real use — use RNode_Firmware_CE instead
+> ## ⚠️ This firmware does not work reliably — abandoned. Use RNode_Firmware_CE.
 >
-> This is a from-scratch reimplementation of the RNode firmware, and it has
-> **known radio bugs** that make it unreliable for actual mesh use. In testing
-> against stock RNode nodes we found broken/incomplete reception of multi-frame
-> (split) packets and CSMA collisions that make larger transfers (e.g. images)
-> crawl or stall. Some of these are fixed in the latest commits, but the firmware
-> is **not validated** and reaching on-air parity with stock RNode is a long tail
-> of subtle, hard-to-test work.
+> This was a from-scratch reimplementation of the RNode firmware. **It has been
+> tested on real hardware and it does not work reliably.** Receiving multi-frame
+> transfers (e.g. images) from stock RNode nodes is broken or unbearably slow,
+> and the radio/CSMA behaviour never reached parity with stock RNode. The various
+> fixes attempted here did not resolve it. **This firmware is no longer maintained
+> and should not be used.**
 >
-> **For a working nRF52 RNode, use the maintained projects instead:**
+> **Use a maintained project instead:**
 > - [RNode_Firmware_CE](https://github.com/liberatedsystems/RNode_Firmware_CE) — community edition, broad nRF52 board support (RAK4631, etc.)
 > - [RNode_Firmware](https://github.com/markqvist/RNode_Firmware) — upstream, by Mark Qvist
 >
 > Flash and provision them with [`rnodeconf`](https://github.com/markqvist/Reticulum) (`pip install rns`) or [liamcottle/rnode-flasher](https://liamcottle.github.io/rnode-flasher/). They're battle-tested and interoperate with the rest of the RNode/Reticulum ecosystem out of the box.
 >
-> The genuinely reusable part of this repo is the **web flasher** (`docs/`); the
-> firmware itself is best treated as a learning/experimentation exercise.
+> The only part of this repo worth reusing is the **web flasher** (`docs/`).
 
 ## Supported Boards
 

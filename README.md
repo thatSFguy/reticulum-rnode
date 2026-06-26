@@ -173,6 +173,17 @@ Thank you. This firmware works because of you.
 
 ## Changelog
 
+### v0.5.2 (webflasher hotfix — no firmware change)
+
+- **Serial DFU per-page write pacing.** The flasher now idles ~102 ms after each
+  4 KB flash page (and before STOP), matching `adafruit-nrfutil`'s
+  `FLASH_PAGE_WRITE_TIME`, and no longer requests hardware flow control (the
+  bootloader's CDC link doesn't implement it). The previous 5 ms gap let the
+  host stream the next page while the bootloader was still blocked writing the
+  current one — bytes were dropped, the image CRC failed, and the board was left
+  with no valid app, so it stayed in the bootloader after flashing. Flash the
+  same `v0.5.1` firmware; only the flasher changed.
+
 ### v0.5.1
 
 - **Webflasher DFU reliability** — the serial-DFU ack reader now consumes one

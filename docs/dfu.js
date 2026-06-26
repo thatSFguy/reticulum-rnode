@@ -143,6 +143,15 @@ const DFU_UPDATE_MODE_APP  = 4;
 const FLASH_PAGE_SIZE        = 4096;
 const FLASH_PAGE_ERASE_MS    = 89.7;
 const DFU_PACKET_MAX_SIZE    = 512;
+// Per-page write pacing, mirrored from adafruit-nrfutil's DfuTransportSerial
+// (FLASH_WORD_WRITE_TIME 100 us × 1024 words/page). The per-packet ack only
+// means the bootloader BUFFERED the packet; when it then blocks to erase+write
+// a flash page its UART RX is unserviced and — with NO hardware flow control on
+// the CDC link — incoming bytes are dropped. So after every 4 KB page (8 × 512 B
+// packets) we must idle long enough for that page write to finish, or the image
+// is silently corrupted and the bootloader rejects it (CRC fail → stuck in DFU).
+const FLASH_WORD_WRITE_MS    = 0.1;
+const FLASH_PAGE_WRITE_MS    = (FLASH_PAGE_SIZE / 4) * FLASH_WORD_WRITE_MS;  // ≈102 ms
 // Generous, non-fatal ack window. The Adafruit/Nordic legacy bootloader
 // is inconsistent about ack timing, so we pace on the ack but never abort
 // the flash on a miss — matching adafruit-nrfutil's lenient transport.
@@ -282,9 +291,12 @@ class DfuTransport {
       sent = Math.min(i + chunk.length, total);
       chunkIdx++;
       if (onProgress) onProgress(sent, total);
-      if (chunkIdx % 8 === 0) await sleep(5);
+      // After each completed 4 KB flash page, wait for the bootloader to finish
+      // writing it before streaming the next page (see FLASH_PAGE_WRITE_MS).
+      if (chunkIdx % 8 === 0) await sleep(FLASH_PAGE_WRITE_MS);
     }
-    await sleep(5);
+    // Let the final (partial) page finish writing before STOP/activate.
+    await sleep(FLASH_PAGE_WRITE_MS);
   }
 
   async sendStopDataPacket() {
@@ -346,17 +358,12 @@ async function dfuFlash(port, dfuPackage, { onStage, onProgress, log } = {}) {
   const logFn = log || (() => {});
 
   HciPacket.resetSequence();
-  // adafruit-nrfutil opens the bootloader port with flow control enabled
-  // (DEFAULT_FLOW_CONTROL = True). Honor that when the platform supports it —
-  // it lets the bootloader hold the host off while it writes a flash page,
-  // which is the main defense against a USB-CDC overrun corrupting the image.
-  // Not every OS/driver implements RTS/CTS over CDC-ACM, so fall back cleanly.
-  try {
-    await port.open({ baudRate: 115200, flowControl: 'hardware' });
-  } catch (e) {
-    logFn('info', 'Hardware flow control unavailable — opening without it');
-    await port.open({ baudRate: 115200 });
-  }
+  // No flow control: adafruit-nrfutil's serial transport uses
+  // DEFAULT_FLOW_CONTROL = False, and the Adafruit nRF52 bootloader's CDC link
+  // doesn't implement RTS/CTS. Overrun is prevented by the per-page write delay
+  // in sendFirmware(), not by flow control. (Requesting 'hardware' here on a
+  // link that ignores it just risks the host stalling on a CTS that never comes.)
+  await port.open({ baudRate: 115200 });
   const transport = new DfuTransport(port, logFn);
   try {
     await transport.open();
